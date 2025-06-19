@@ -1,0 +1,18 @@
+{
+  "source_file": "C:/Users/vladk/Downloads/test sequence.csv",
+  "file_type": "CSV",
+  "selected_column": "Column 1: storename",
+  "column_name": "Column_1",
+  "column_index": 0,
+  "column_values": [
+    "storename",
+    "TOPA108",
+    "TOPE022",
+    "TOPA114",
+    "TOPA042",
+    "TOPE019",
+    "TOPA116"
+  ],
+  "total_records": 7,
+  "created_date": "2025-06-19T11:33:32.526561"
+}
