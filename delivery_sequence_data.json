@@ -1,18 +1,19 @@
 {
-  "source_file": "C:/Users/vladk/Downloads/test sequence.csv",
-  "file_type": "CSV",
-  "selected_column": "Column 1: storename",
-  "column_name": "Column_1",
-  "column_index": 0,
-  "column_values": [
-    "storename",
-    "TOPA108",
-    "TOPE022",
-    "TOPA114",
-    "TOPA042",
-    "TOPE019",
-    "TOPA116"
+  "delivery_sequences": [
+    "A060J76",
+    "A060U8M"
   ],
-  "total_records": 7,
-  "created_date": "2025-06-19T11:33:32.526561"
+  "delivery_data_with_drivers": {
+    "A060J76": {
+      "stop_number": "1",
+      "driver_number": "driver1"
+    },
+    "A060U8M": {
+      "stop_number": "1",
+      "driver_number": "driver2"
+    }
+  },
+  "source_file": "C:/Users/vladk/OneDrive - Atlantic TU/Desktop/11111111111111111/backend testing.xls",
+  "total_records": 2,
+  "created_date": "2025-07-04T12:23:57.626175"
 }
