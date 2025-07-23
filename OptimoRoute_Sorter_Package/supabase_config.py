@@ -235,7 +235,6 @@ def get_barcode_scan_history(order_id: str) -> List[Dict]:
 def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str) -> bool:
     """
     Upload store orders from Excel file to dispatch_orders table
-    *** ORDER PRESERVATION: Records are uploaded in EXACT Excel file order ***
     
     Expected Excel columns:
     - Column A: ordernumber
@@ -246,7 +245,7 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str)
     - Column F: quantity
     
     Args:
-        excel_data: List of dictionaries containing store order items (in Excel row order)
+        excel_data: List of dictionaries containing store order items
         excel_file_name: Name of the Excel file
     
     Returns:
@@ -255,8 +254,7 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str)
     try:
         records = []
         
-        # Process records in exact Excel order (enumerate gives us the sequence)
-        for excel_row_index, item in enumerate(excel_data):
+        for i, item in enumerate(excel_data):
             # Handle the specific column mapping for dispatch_orders table
             # Column A: ordernumber
             ordernumber_raw = (item.get('ordernumber') or 
@@ -317,15 +315,14 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str)
             except (ValueError, TypeError):
                 quantity = 0
             
-            # Create record for dispatch_orders table with Excel row sequence preservation
+            # Create record for dispatch_orders table
             record = {
                 'ordernumber': str(ordernumber),
                 'itemcode': str(itemcode),
                 'product_description': str(product_description) if product_description else None,
                 'barcode': str(barcode) if barcode else None,
                 'customer_type': str(customer_type) if customer_type else None,
-                'quantity': quantity,
-                'excel_row_sequence': excel_row_index + 1  # CRITICAL: Preserves Excel file row order (1-based)
+                'quantity': quantity
             }
             records.append(record)
         
@@ -334,25 +331,20 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str)
             print(f"Sample data: {excel_data[:3] if excel_data else 'No data'}")
             return False
         
-        # Insert records in batches to maintain order
-        # Note: Supabase should preserve the insertion order when we provide explicit sequence numbers
-        print(f"📋 Uploading {len(records)} records in Excel file order...")
+        # Insert all records into dispatch_orders table
         result = supabase.table('dispatch_orders').insert(records).execute()
         
         print(f"✅ Successfully uploaded {len(records)} dispatch order items from {excel_file_name}")
-        print(f"🔢 Excel row order preserved using sequence numbers 1-{len(records)}")
         
-        # Show summary by order with sequence info
+        # Show summary by order
         order_counts = {}
         for record in records:
             ordernumber = record['ordernumber']
-            if ordernumber not in order_counts:
-                order_counts[ordernumber] = {'count': 0, 'first_sequence': record['excel_row_sequence']}
-            order_counts[ordernumber]['count'] += 1
+            order_counts[ordernumber] = order_counts.get(ordernumber, 0) + 1
         
-        print("📋 Dispatch orders uploaded by order (with picking sequence):")
-        for ordernumber, info in order_counts.items():
-            print(f"  - Order {ordernumber}: {info['count']} items (starting at row {info['first_sequence']})")
+        print("📋 Dispatch orders uploaded by order:")
+        for ordernumber, count in order_counts.items():
+            print(f"  - Order {ordernumber}: {count} items")
         
         return True
         

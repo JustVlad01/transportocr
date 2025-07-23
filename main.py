@@ -13,6 +13,8 @@ from reportlab.lib import colors
 import barcode
 from barcode.writer import ImageWriter
 import hashlib
+import requests
+from datetime import datetime, timedelta
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -20,16 +22,15 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QProgressBar, QStatusBar, QFrame,
     QScrollArea, QGroupBox, QSplitter, QComboBox, QDialog, 
     QDialogButtonBox, QListWidget, QTableWidget, QTableWidgetItem,
-    QHeaderView, QPlainTextEdit, QCheckBox, QTabWidget
+    QHeaderView, QPlainTextEdit, QCheckBox, QTabWidget, QDateEdit
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QDate
 from PySide6.QtGui import QFont, QPalette, QColor, QIcon, QPixmap
 
 # Import Supabase configuration
 from supabase_config import save_generated_barcodes
 
-# Import OptimoRoute tab
-from optimoroute_tab import OptimoRouteTab
+
 
 
 class ProcessingThread(QThread):
@@ -504,6 +505,239 @@ class ProcessingResultsDialog(QDialog):
         """)
 
 
+class OptimoRouteApiThread(QThread):
+    """Background thread for OptimoRoute API operations"""
+    progress_signal = Signal(str)
+    finished_signal = Signal(bool, list)
+    
+    def __init__(self, api_key, from_date=None, to_date=None, driver_filter=None):
+        super().__init__()
+        self.api_key = api_key
+        self.base_url = "https://api.optimoroute.com/v1"
+        self.from_date = from_date
+        self.to_date = to_date
+        self.driver_filter = driver_filter
+    
+    def run(self):
+        try:
+            self.progress_signal.emit("Connecting to OptimoRoute API...")
+            
+            headers = {
+                'Content-Type': 'application/json'
+            }
+            
+            orders = []
+            
+            # Use custom dates if provided, otherwise default to last 7 days
+            if self.from_date and self.to_date:
+                from_date = self.from_date
+                to_date = self.to_date
+                self.progress_signal.emit(f"Searching for orders from {from_date} to {to_date}...")
+            else:
+                from_date = (datetime.now() - timedelta(days=6)).strftime('%Y-%m-%d')
+                to_date = datetime.now().strftime('%Y-%m-%d')
+                self.progress_signal.emit("Searching for orders in the last 7 days...")
+            
+            request_body = {
+                "dateRange": {
+                    "from": from_date,
+                    "to": to_date
+                },
+                "includeOrderData": True,
+                "includeScheduleInformation": True
+            }
+            
+            # Add driver filter if specified
+            if self.driver_filter and self.driver_filter.strip() and self.driver_filter != "All Drivers":
+                request_body["driverName"] = self.driver_filter.strip()
+                self.progress_signal.emit(f"Filtering by driver: {self.driver_filter.strip()}")
+            else:
+                self.progress_signal.emit("Fetching orders for all drivers")
+            
+            url = f"{self.base_url}/search_orders"
+            params = {'key': self.api_key}
+            
+            # Handle pagination with after_tag
+            after_tag = None
+            page_count = 0
+            max_pages = 10  # Safety limit to prevent infinite loops
+            
+            while page_count < max_pages:
+                if after_tag:
+                    request_body["after_tag"] = after_tag
+                    self.progress_signal.emit(f"Fetching page {page_count + 1} of orders...")
+                
+                try:
+                    response = requests.post(
+                        url, 
+                        headers=headers, 
+                        params=params,
+                        json=request_body,
+                        timeout=15
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        
+                        if data.get('success') and data.get('orders'):
+                            self.progress_signal.emit(f"Processing {len(data['orders'])} orders from page {page_count + 1}...")
+                            
+                            # Process each order
+                            for order_item in data['orders']:
+                                order_data = order_item.get('data', {})
+                                schedule_info = order_item.get('scheduleInformation', {})
+                                
+                                if order_data:  # Only process if we have order data
+                                    # Build comprehensive order data
+                                    processed_order = {
+                                        'id': order_data.get('id', ''),
+                                        'orderNo': order_data.get('orderNo', ''),
+                                        'date': order_data.get('date', ''),
+                                        'address': order_data.get('location', {}).get('address', ''),
+                                        'locationName': order_data.get('location', {}).get('locationName', ''),
+                                        'latitude': order_data.get('location', {}).get('latitude', ''),
+                                        'longitude': order_data.get('location', {}).get('longitude', ''),
+                                        'duration': order_data.get('duration', 0),
+                                        'priority': order_data.get('priority', ''),
+                                        'type': order_data.get('type', ''),
+                                        'load1': order_data.get('load1', 0),
+                                        'load2': order_data.get('load2', 0),
+                                        'load3': order_data.get('load3', 0),
+                                        'load4': order_data.get('load4', 0),
+                                        'timeWindows': order_data.get('timeWindows', []),
+                                        'skills': order_data.get('skills', []),
+                                        'vehicleFeatures': order_data.get('vehicleFeatures', []),
+                                        'notes': order_data.get('notes', ''),
+                                        'phone': order_data.get('phone', ''),
+                                        'email': order_data.get('email', ''),
+                                        'customField1': order_data.get('customField1', ''),
+                                        'customField2': order_data.get('customField2', ''),
+                                        'customField3': order_data.get('customField3', ''),
+                                        'customField4': order_data.get('customField4', ''),
+                                        'customField5': order_data.get('customField5', ''),
+                                        'allowedWeekdays': order_data.get('allowedWeekdays', []),
+                                        'notificationPreference': order_data.get('notificationPreference', ''),
+                                        'assignedTo': order_data.get('assignedTo'),
+                                        # Schedule information from includeScheduleInformation
+                                        'driverName': schedule_info.get('driverName', '') if schedule_info else '',
+                                        'driverExternalId': schedule_info.get('driverExternalId', '') if schedule_info else '',
+                                        'vehicleLabel': schedule_info.get('vehicleLabel', '') if schedule_info else '',
+                                        'vehicleRegistration': schedule_info.get('vehicleRegistration', '') if schedule_info else '',
+                                        'scheduledAt': schedule_info.get('scheduledAt', '') if schedule_info else '',
+                                        'scheduledAtDt': schedule_info.get('scheduledAtDt', '') if schedule_info else '',
+                                        'arrivalTimeDt': schedule_info.get('arrivalTimeDt', '') if schedule_info else '',
+                                        'stopNumber': schedule_info.get('stopNumber', '') if schedule_info else '',
+                                        'travelTime': schedule_info.get('travelTime', 0) if schedule_info else 0,
+                                        'distance': schedule_info.get('distance', 0) if schedule_info else 0,
+                                        'status': 'scheduled' if schedule_info else 'unscheduled'
+                                    }
+                                    orders.append(processed_order)
+                            
+                            # Check for pagination
+                            after_tag = data.get('after_tag')
+                            if not after_tag:
+                                break  # No more pages
+                            
+                            page_count += 1
+                        else:
+                            self.progress_signal.emit("No orders found in response")
+                            break
+                            
+                    elif response.status_code == 401:
+                        self.progress_signal.emit("Authentication failed - please check your API key")
+                        self.finished_signal.emit(False, [])
+                        return
+                    else:
+                        self.progress_signal.emit(f"API returned status {response.status_code}: {response.text}")
+                        break
+                        
+                except requests.exceptions.RequestException as e:
+                    self.progress_signal.emit(f"Network error: {str(e)}")
+                    break
+            
+            if not orders:
+                # If no orders found, try a broader date range to test API
+                self.progress_signal.emit("No orders found in last 7 days, testing with broader range...")
+                
+                # Try last 30 days
+                from_date_extended = (datetime.now() - timedelta(days=29)).strftime('%Y-%m-%d')
+                to_date_extended = datetime.now().strftime('%Y-%m-%d')
+                
+                test_request_body = {
+                    "dateRange": {
+                        "from": from_date_extended,
+                        "to": to_date_extended
+                    },
+                    "includeOrderData": False  # Just test connection
+                }
+                
+                try:
+                    test_response = requests.post(
+                        url, 
+                        headers=headers, 
+                        params=params,
+                        json=test_request_body,
+                        timeout=10
+                    )
+                    
+                    if test_response.status_code == 200:
+                        test_data = test_response.json()
+                        if test_data.get('success'):
+                            order_count = len(test_data.get('orders', []))
+                            self.progress_signal.emit(f"API connection successful! Found {order_count} orders in last 30 days, but none in last 7 days.")
+                            # Create a sample entry to show the connection works
+                            orders = [{
+                                'id': 'no-orders-found',
+                                'orderNo': 'No recent orders',
+                                'date': datetime.now().strftime('%Y-%m-%d'),
+                                'address': 'API connection successful',
+                                'locationName': f'Found {order_count} orders in last 30 days, none in last 7 days',
+                                'latitude': '',
+                                'longitude': '',
+                                'scheduledAt': '',
+                                'driverName': '',
+                                'vehicleLabel': '',
+                                'duration': 0,
+                                'priority': '',
+                                'type': '',
+                                'status': 'info'
+                            }]
+                        else:
+                            self.progress_signal.emit("API connection successful but returned no results")
+                            orders = [{
+                                'id': 'api-test',
+                                'orderNo': 'API Test',
+                                'date': datetime.now().strftime('%Y-%m-%d'),
+                                'address': 'API connection successful',
+                                'locationName': 'No orders found in system',
+                                'latitude': '',
+                                'longitude': '',
+                                'scheduledAt': '',
+                                'driverName': '',
+                                'vehicleLabel': '',
+                                'duration': 0,
+                                'priority': '',
+                                'type': '',
+                                'status': 'info'
+                            }]
+                    else:
+                        self.progress_signal.emit(f"API connection test failed: {test_response.status_code}")
+                        self.finished_signal.emit(False, [])
+                        return
+                        
+                except requests.exceptions.RequestException as e:
+                    self.progress_signal.emit(f"API connection test error: {str(e)}")
+                    self.finished_signal.emit(False, [])
+                    return
+            
+            self.progress_signal.emit(f"Successfully fetched {len(orders)} orders")
+            self.finished_signal.emit(True, orders)
+            
+        except Exception as e:
+            self.progress_signal.emit(f"Error: {str(e)}")
+            self.finished_signal.emit(False, [])
+
+
 class TransportSorterApp(QMainWindow):
     """Main application class for Transport Sorter PySide6 version"""
     
@@ -524,6 +758,11 @@ class TransportSorterApp(QMainWindow):
         
         # Track processing state
         self.picking_dockets_processed = False
+        
+        # OptimoRoute API setup
+        self.api_key = "3ac9317b7972340ccf529ef24f9374fbfYhFnF5FyX4"
+        self.optimoroute_thread = None
+        self.scheduled_orders_data = []
         
         # Initialize UI
         self.init_ui()
@@ -547,9 +786,7 @@ class TransportSorterApp(QMainWindow):
         main_layout.setSpacing(20)
         main_layout.setContentsMargins(20, 20, 20, 20)
         
-        # Header
-        header = self.create_header()
-        main_layout.addWidget(header)
+        # Header removed per user request
         
         # Create tab widget
         self.tab_widget = QTabWidget()
@@ -558,11 +795,9 @@ class TransportSorterApp(QMainWindow):
         # Create tabs
         transport_tab = self.create_transport_tab()
         dispatch_tab = self.create_dispatch_tab()
-        optimoroute_tab = OptimoRouteTab()
         
-        self.tab_widget.addTab(transport_tab, "Transport Sorter")
+        self.tab_widget.addTab(transport_tab, "OptimoRoute Sorter")
         self.tab_widget.addTab(dispatch_tab, "Dispatch Scanning")
-        self.tab_widget.addTab(optimoroute_tab, "OptimoRoute Orders")
         
         main_layout.addWidget(self.tab_widget)
         
@@ -620,22 +855,43 @@ class TransportSorterApp(QMainWindow):
         layout.addWidget(output_btn)
         
         # Spacer
-        layout.addSpacing(20)
+        layout.addSpacing(15)
         
-        # Delivery file
-        layout.addWidget(QLabel("Delivery Sequence File:"))
-        self.delivery_file_edit = QLineEdit()
-        self.delivery_file_edit.setPlaceholderText("Select CSV/Excel file...")
-        layout.addWidget(self.delivery_file_edit)
+        # Date selection for fetching deliveries
+        layout.addWidget(QLabel("Fetch Deliveries From Date:"))
+        self.fetch_from_date = QDateEdit()
+        self.fetch_from_date.setDate(QDate.currentDate().addDays(-7))  # Default to 7 days ago
+        self.fetch_from_date.setCalendarPopup(True)
+        self.fetch_from_date.setDisplayFormat("yyyy-MM-dd")
+        layout.addWidget(self.fetch_from_date)
         
-        delivery_btn = QPushButton("Browse")
-        delivery_btn.clicked.connect(self.browse_delivery_file)
-        layout.addWidget(delivery_btn)
+        # Driver filter
+        layout.addWidget(QLabel("Filter by Driver (Optional):"))
+        self.driver_filter = QComboBox()
+        self.driver_filter.addItem("All Drivers")  # Default option
+        self.driver_filter.setEditable(True)  # Allow custom driver input
+        self.driver_filter.setPlaceholderText("Select or enter driver name/ID")
+        layout.addWidget(self.driver_filter)
         
-        self.load_data_btn = QPushButton("Load Data")
-        self.load_data_btn.setObjectName("primaryButton")
-        self.load_data_btn.clicked.connect(self.load_delivery_file)
-        layout.addWidget(self.load_data_btn)
+        # Spacer
+        layout.addSpacing(10)
+        
+        # Fetch and Load from Scheduled Deliveries button with API status
+        fetch_layout = QHBoxLayout()
+        
+        self.fetch_and_load_btn = QPushButton("🔄 Fetch & Load Scheduled Deliveries")
+        self.fetch_and_load_btn.setObjectName("primaryButton")
+        self.fetch_and_load_btn.clicked.connect(self.fetch_and_load_scheduled_deliveries)
+        fetch_layout.addWidget(self.fetch_and_load_btn)
+        
+        fetch_layout.addStretch()
+        
+        # API Status indicator
+        self.api_status_label = QLabel("● Disconnected")
+        self.api_status_label.setObjectName("apiStatusDisconnected")
+        fetch_layout.addWidget(self.api_status_label)
+        
+        layout.addLayout(fetch_layout)
         
         layout.addStretch()
         
@@ -822,13 +1078,13 @@ class TransportSorterApp(QMainWindow):
         """Create the Transport Sorter tab with sections 1, 2, 3"""
         tab_widget = QWidget()
         tab_layout = QVBoxLayout(tab_widget)
-        tab_layout.setSpacing(20)
+        tab_layout.setSpacing(15)
         tab_layout.setContentsMargins(20, 20, 20, 20)
         
         # Content area - 3 column grid
         content_widget = QWidget()
         content_layout = QGridLayout(content_widget)
-        content_layout.setSpacing(15)
+        content_layout.setSpacing(10)
         
         # Create sections
         setup_section = self.create_setup_section()
@@ -853,6 +1109,8 @@ class TransportSorterApp(QMainWindow):
         tab_layout.addWidget(self.process_all_btn)
         
         return tab_widget
+    
+
     
     def create_dispatch_tab(self):
         """Create the Dispatch Scanning tab with sections 4, 5 and output"""
@@ -1070,6 +1328,61 @@ class TransportSorterApp(QMainWindow):
                 alternate-background-color: #f8fafc;
             }
             
+            /* Scrollbar Styling */
+            QScrollBar:vertical {
+                background-color: #f8fafc;
+                width: 12px;
+                border: none;
+                border-radius: 6px;
+            }
+            
+            QScrollBar::handle:vertical {
+                background-color: #cbd5e1;
+                border-radius: 6px;
+                min-height: 20px;
+                margin: 2px;
+            }
+            
+            QScrollBar::handle:vertical:hover {
+                background-color: #94a3b8;
+            }
+            
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                background: none;
+            }
+            
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+            
+            QScrollBar:horizontal {
+                background-color: #f8fafc;
+                height: 12px;
+                border: none;
+                border-radius: 6px;
+            }
+            
+            QScrollBar::handle:horizontal {
+                background-color: #cbd5e1;
+                border-radius: 6px;
+                min-width: 20px;
+                margin: 2px;
+            }
+            
+            QScrollBar::handle:horizontal:hover {
+                background-color: #94a3b8;
+            }
+            
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                background: none;
+            }
+            
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
+            }
+            
             QTableWidget::item {
                 padding: 8px;
                 border-bottom: 1px solid #f1f5f9;
@@ -1118,7 +1431,7 @@ class TransportSorterApp(QMainWindow):
                 border-radius: 3px;
             }
             
-            QComboBox {
+            QComboBox, QDateEdit {
                 border: 1px solid #d1d5db;
                 border-radius: 6px;
                 padding: 8px 12px;
@@ -1127,7 +1440,7 @@ class TransportSorterApp(QMainWindow):
                 font-size: 13px;
             }
             
-            QComboBox:hover {
+            QComboBox:hover, QDateEdit:hover {
                 border-color: #2563eb;
             }
             
@@ -1147,6 +1460,82 @@ class TransportSorterApp(QMainWindow):
                 border-left: 5px solid transparent;
                 border-right: 5px solid transparent;
                 border-top: 5px solid #374151;
+            }
+            
+
+            
+            QLabel#apiStatusConnected {
+                color: #059669;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            
+            QLabel#apiStatusDisconnected {
+                color: #dc2626;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            
+            QTableWidget {
+                background-color: white;
+                gridline-color: #e2e8f0;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+            }
+            
+            QTableWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #f1f5f9;
+            }
+            
+            QTableWidget::item:selected {
+                background-color: #eff6ff;
+                color: #1e40af;
+            }
+            
+            QTableWidget QHeaderView::section {
+                background-color: #f8fafc;
+                padding: 8px;
+                border: none;
+                border-bottom: 2px solid #e2e8f0;
+                font-weight: 600;
+                color: #374151;
+            }
+            
+            /* Message Box Styling */
+            QMessageBox {
+                background-color: white;
+                color: #374151;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 20px;
+                font-size: 14px;
+            }
+            
+            QMessageBox QLabel {
+                background-color: transparent;
+                color: #374151;
+                font-size: 14px;
+                padding: 10px;
+            }
+            
+            QMessageBox QPushButton {
+                background-color: #2563eb;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-weight: 500;
+                font-size: 14px;
+                min-width: 80px;
+            }
+            
+            QMessageBox QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+            
+            QMessageBox QPushButton:pressed {
+                background-color: #1e40af;
             }
         """)
     
@@ -1174,16 +1563,7 @@ class TransportSorterApp(QMainWindow):
         if directory:
             self.output_dir_edit.setText(directory)
     
-    def browse_delivery_file(self):
-        """Browse for delivery sequence file"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Delivery Sequence File",
-            str(Path.home()),
-            "Data files (*.xlsx *.xls *.csv);;Excel files (*.xlsx *.xls);;CSV files (*.csv);;All files (*.*)"
-        )
-        if file_path:
-            self.delivery_file_edit.setText(file_path)
+
     
     def browse_pdf_files(self):
         """Browse for PDF files to process"""
@@ -1497,39 +1877,38 @@ class TransportSorterApp(QMainWindow):
             """)
     
     # Data handling methods
-    def load_delivery_file(self):
-        """Load delivery sequence data from file"""
-        file_path = self.delivery_file_edit.text()
-        if not file_path:
-            QMessageBox.warning(self, "No File Selected", "Please select a delivery sequence file first.")
-            return
-        
+
+    
+    def load_from_scheduled_deliveries_internal(self):
+        """Internal method to load delivery sequence data from OptimoRoute scheduled deliveries"""
         try:
-            self.update_status("Loading delivery data...")
-            
-            # Load data based on file type
-            if file_path.lower().endswith('.csv'):
-                data = pd.read_csv(file_path)
-            else:
-                data = pd.read_excel(file_path)
-            
-            if data is None or data.empty:
-                QMessageBox.warning(self, "No Data", "The selected file contains no data.")
+            # Check if we have scheduled deliveries data
+            if not hasattr(self, 'scheduled_orders_data') or not self.scheduled_orders_data:
+                self.update_status("No scheduled deliveries data available")
                 return
             
-            # Ensure we have at least 3 columns (Order ID, Stop Number, Driver Number)
-            if len(data.columns) < 3:
-                QMessageBox.warning(self, "Invalid Data", "The file must have at least 3 columns: Order ID, Stop Number, Driver Number.")
+            # Filter for scheduled orders only (orders that have scheduling information)
+            scheduled_orders = [order for order in self.scheduled_orders_data 
+                              if order.get('scheduledAt') or order.get('scheduledAtDt')]
+            
+            if not scheduled_orders:
+                self.update_status("No scheduled orders found in the OptimoRoute data")
                 return
             
-            # Extract Order ID and Driver Number mapping
+            self.update_status("Loading delivery data from scheduled deliveries...")
+            
+            # Convert OptimoRoute data to delivery sequence format
             self.delivery_data_values = []
             self.delivery_data_with_drivers = {}
             
-            for index, row in data.iterrows():
-                order_id = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
-                stop_number = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-                driver_number = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+            for order in scheduled_orders:
+                order_id = str(order.get('orderNo', '')).strip()
+                stop_number = str(order.get('stopNumber', '')).strip()
+                driver_name = str(order.get('driverName', '')).strip()
+                driver_external_id = str(order.get('driverExternalId', '')).strip()
+                
+                # Use driver_external_id if available, otherwise use driver_name
+                driver_number = driver_external_id if driver_external_id else driver_name
                 
                 if order_id and driver_number:
                     self.delivery_data_values.append(order_id)
@@ -1538,37 +1917,49 @@ class TransportSorterApp(QMainWindow):
                         'driver_number': driver_number
                     }
             
+            if not self.delivery_data_values:
+                self.update_status("No valid orders with driver assignments found in scheduled deliveries")
+                return
+            
             # Save to JSON
-            self.save_delivery_data()
+            self.save_delivery_data("scheduled_deliveries")
             
             # Update display
             self.update_delivery_display()
-            self.update_status(f"Loaded {len(self.delivery_data_values)} delivery sequences with driver assignments")
+            self.update_driver_filter_options()
+            self.update_status(f"✅ Successfully loaded {len(self.delivery_data_values)} delivery sequences from scheduled deliveries")
             
-            # Debug: Show first few loaded entries
-            debug_info = f"Successfully loaded {len(self.delivery_data_values)} delivery sequences with driver assignments.\n\n"
-            debug_info += "First 5 entries:\n"
-            for i, (order_id, data) in enumerate(list(self.delivery_data_with_drivers.items())[:5]):
-                debug_info += f"  {i+1}. Order '{order_id}' → Driver '{data['driver_number']}'\n"
-            if len(self.delivery_data_with_drivers) > 5:
-                debug_info += f"  ... and {len(self.delivery_data_with_drivers) - 5} more entries"
+            # Show success message with details
+            driver_filter_text = self.driver_filter.currentText().strip()
+            driver_info = f"Driver filter: {driver_filter_text}\n" if driver_filter_text != "All Drivers" else "Driver filter: All Drivers\n"
             
             QMessageBox.information(
                 self, 
-                "Data Loaded", 
-                debug_info
+                "Success", 
+                f"Successfully fetched and loaded {len(self.delivery_data_values)} delivery sequences from OptimoRoute scheduled deliveries.\n\n"
+                f"Date range: {self.fetch_from_date.date().toString('yyyy-MM-dd')} to {datetime.now().strftime('%Y-%m-%d')}\n"
+                f"{driver_info}\n"
+                f"Data mapping:\n"
+                f"• Order No → Column A\n"
+                f"• Stop# → Column B\n" 
+                f"• Driver → Column C\n\n"
+                f"You can now process delivery PDFs using this data."
             )
+            
         except Exception as e:
-            QMessageBox.critical(self, "Error Loading File", f"Error loading file: {str(e)}")
-            self.update_status(f"Error loading file: {str(e)}")
+            self.update_status(f"Error loading from scheduled deliveries: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to load from scheduled deliveries: {str(e)}")
     
-    def save_delivery_data(self):
+    def save_delivery_data(self, source_type="scheduled_deliveries"):
         """Save delivery data to JSON file"""
         try:
+            source_info = "OptimoRoute Scheduled Deliveries"
+                
             data = {
                 "delivery_sequences": self.delivery_data_values,
                 "delivery_data_with_drivers": self.delivery_data_with_drivers,
-                "source_file": self.delivery_file_edit.text(),
+                "source_file": source_info,
+                "source_type": source_type,
                 "total_records": len(self.delivery_data_values),
                 "created_date": pd.Timestamp.now().isoformat()
             }
@@ -1587,10 +1978,9 @@ class TransportSorterApp(QMainWindow):
                 
                 self.delivery_data_values = data.get("delivery_sequences", [])
                 self.delivery_data_with_drivers = data.get("delivery_data_with_drivers", {})
-                if "source_file" in data:
-                    self.delivery_file_edit.setText(data["source_file"])
                 
                 self.update_delivery_display()
+                self.update_driver_filter_options()
         except Exception as e:
             print(f"Error loading existing data: {e}")
     
@@ -1611,6 +2001,96 @@ class TransportSorterApp(QMainWindow):
             self.data_table.setItem(i, 3, QTableWidgetItem(str(driver_number)))
         
         self.data_table.resizeColumnsToContents()
+    
+    def update_driver_filter_options(self):
+        """Update driver filter dropdown with drivers from current data"""
+        try:
+            # Get current selection
+            current_selection = self.driver_filter.currentText()
+            
+            # Clear existing items except "All Drivers"
+            self.driver_filter.clear()
+            self.driver_filter.addItem("All Drivers")
+            
+            # Get unique drivers from current data
+            drivers = set()
+            for order_id, data in self.delivery_data_with_drivers.items():
+                driver = data.get('driver_number', '')
+                if driver and driver.strip():
+                    drivers.add(driver.strip())
+            
+            # Add drivers to dropdown
+            for driver in sorted(drivers):
+                self.driver_filter.addItem(driver)
+            
+            # Restore previous selection if it exists
+            index = self.driver_filter.findText(current_selection)
+            if index >= 0:
+                self.driver_filter.setCurrentIndex(index)
+            else:
+                self.driver_filter.setCurrentIndex(0)  # Default to "All Drivers"
+                
+        except Exception as e:
+            print(f"Error updating driver filter options: {e}")
+    
+    # OptimoRoute API methods
+    def fetch_and_load_scheduled_deliveries(self):
+        """Fetch scheduled orders from OptimoRoute API and load them into the data preview"""
+        if self.optimoroute_thread and self.optimoroute_thread.isRunning():
+            QMessageBox.information(self, "In Progress", "Already fetching orders. Please wait...")
+            return
+        
+        # Get date range and driver filter from UI
+        from_date = self.fetch_from_date.date().toString("yyyy-MM-dd")
+        to_date = datetime.now().strftime('%Y-%m-%d')  # Always fetch up to today
+        driver_filter = self.driver_filter.currentText().strip() if self.driver_filter.currentText().strip() != "All Drivers" else None
+        
+        # Disable button and update status
+        self.fetch_and_load_btn.setEnabled(False)
+        self.fetch_and_load_btn.setText("Fetching...")
+        self.update_api_status(False)
+        
+        # Start background thread with custom date range and driver filter
+        self.optimoroute_thread = OptimoRouteApiThread(self.api_key, from_date, to_date, driver_filter)
+        self.optimoroute_thread.progress_signal.connect(self.update_api_progress)
+        self.optimoroute_thread.finished_signal.connect(self.on_fetch_and_load_finished)
+        self.optimoroute_thread.start()
+    
+    def on_fetch_and_load_finished(self, success, orders):
+        """Handle fetch completion and automatically load data"""
+        self.fetch_and_load_btn.setEnabled(True)
+        self.fetch_and_load_btn.setText("🔄 Fetch & Load Scheduled Deliveries")
+        
+        if success:
+            self.scheduled_orders_data = orders
+            self.update_api_status(True)
+            
+            # Automatically load the fetched data into delivery sequence
+            self.load_from_scheduled_deliveries_internal()
+            
+        else:
+            self.update_api_status(False)
+            QMessageBox.warning(self, "API Error", "Failed to fetch orders from OptimoRoute API.")
+    
+
+    
+    def update_api_progress(self, message):
+        """Update API progress message"""
+        # For now, we don't have a status label in the main tab, so we'll ignore progress messages
+        pass
+    
+    def update_api_status(self, connected):
+        """Update API connection status"""
+        if connected:
+            self.api_status_label.setText("● Connected")
+            self.api_status_label.setObjectName("apiStatusConnected")
+        else:
+            self.api_status_label.setText("● Disconnected")
+            self.api_status_label.setObjectName("apiStatusDisconnected")
+        
+        # Apply style updates
+        self.api_status_label.style().unpolish(self.api_status_label)
+        self.api_status_label.style().polish(self.api_status_label)
     
     # Processing methods
     def process_all_pdfs_and_packing(self):
