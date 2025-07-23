@@ -443,7 +443,7 @@ class ProcessingResultsDialog(QDialog):
 
 
 class DispatchScanningApp(QMainWindow):
-    """Dispatch Scanning Application for Picking Dockets and Store Orders"""
+    """Upload Excel Files, Process PDFs, Generate Barcodes"""
     
     def __init__(self):
         super().__init__()
@@ -453,7 +453,7 @@ class DispatchScanningApp(QMainWindow):
         self.delivery_data_with_drivers = {}
         self.delivery_json_file = "delivery_sequence_data.json"
         self.selected_picking_pdf_files = []
-        self.selected_store_order_files = []
+
         self.selected_excel_file = ""  # NEW: Excel file with order numbers in column A
         self.selected_output_folder = ""  # NEW: Selected output folder
         self.excel_order_numbers = []  # NEW: Order numbers from Excel column A
@@ -473,8 +473,8 @@ class DispatchScanningApp(QMainWindow):
     
     def init_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle("Dispatch Scanning - Picking & Store Orders")
-        self.setGeometry(100, 100, 1400, 900)
+        self.setWindowTitle("Dispatch Scanning - Streamlined Processing")
+        self.setGeometry(100, 100, 1000, 650)
         
         # Central widget
         central_widget = QWidget()
@@ -482,36 +482,22 @@ class DispatchScanningApp(QMainWindow):
         
         # Main layout
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(15, 15, 15, 15)
         
         # Header
         header_frame = self.create_header()
         main_layout.addWidget(header_frame)
         
-        # Content area - 2 column grid
-        content_widget = QWidget()
-        content_layout = QGridLayout(content_widget)
-        content_layout.setSpacing(15)
-        
-        # Create sections
+        # Content area - single column for picking section
         picking_section = self.create_picking_section()
-        store_order_section = self.create_store_order_section()
-        
-        content_layout.addWidget(picking_section, 0, 0)
-        content_layout.addWidget(store_order_section, 0, 1)
-        
-        # Set equal column widths
-        for i in range(2):
-            content_layout.setColumnStretch(i, 1)
-        
-        main_layout.addWidget(content_widget)
+        main_layout.addWidget(picking_section)
         
         # Process button
-        self.process_picking_btn = QPushButton("Process Picking Dockets with Barcodes")
+        self.process_picking_btn = QPushButton("Process PDF Files & Upload")
         self.process_picking_btn.setObjectName("primaryButton")
         self.process_picking_btn.clicked.connect(self.process_picking_dockets)
-        self.process_picking_btn.setFixedHeight(50)
+        self.process_picking_btn.setFixedHeight(35)
         main_layout.addWidget(self.process_picking_btn)
         
         # Output section
@@ -532,10 +518,10 @@ class DispatchScanningApp(QMainWindow):
         """Create application header"""
         header_frame = QFrame()
         header_frame.setObjectName("headerFrame")
-        header_frame.setFixedHeight(80)
+        header_frame.setFixedHeight(55)
         
         layout = QHBoxLayout(header_frame)
-        layout.setContentsMargins(0, 15, 0, 15)
+        layout.setContentsMargins(0, 10, 0, 10)
         
         title_label = QLabel("Dispatch Scanning")
         title_label.setObjectName("headerTitle")
@@ -543,9 +529,7 @@ class DispatchScanningApp(QMainWindow):
         
         layout.addStretch()
         
-        subtitle_label = QLabel("Picking Dockets & Store Order Processing")
-        subtitle_label.setObjectName("headerSubtitle")
-        layout.addWidget(subtitle_label)
+       
         
         return header_frame
     
@@ -555,27 +539,23 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(15)
+        layout.setSpacing(10)
         
         # Section title
-        title = QLabel("1. Process Picking Dockets")
+        title = QLabel("Process Picking Dockets & Upload Store Orders")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
         
-        # Info message
-        info_label = QLabel("⚠️ Note: Load delivery sequence data in OptimoRoute Sorter first!")
-        info_label.setObjectName("warningText")
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
+       
         
-        # NEW: Excel file with order numbers subsection
-        excel_label = QLabel("Excel File with Order Numbers (Column A):")
-        excel_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        # Excel file with store orders subsection
+        excel_label = QLabel("Store Order Excel File (for barcodes & database upload):")
+        excel_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
         layout.addWidget(excel_label)
         
         # Excel file selection row
         excel_btn_layout = QHBoxLayout()
-        self.browse_excel_btn = QPushButton("Select Excel File")
+        self.browse_excel_btn = QPushButton("Select Store Order Excel File")
         self.browse_excel_btn.clicked.connect(self.browse_excel_file)
         
         self.clear_excel_btn = QPushButton("Clear")
@@ -594,7 +574,7 @@ class DispatchScanningApp(QMainWindow):
         
         # NEW: Output folder selection subsection
         output_label = QLabel("Output Folder:")
-        output_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        output_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
         layout.addWidget(output_label)
         
         # Output folder selection row
@@ -611,14 +591,14 @@ class DispatchScanningApp(QMainWindow):
         layout.addLayout(output_btn_layout)
         
         # Output folder display
-        self.output_folder_label = QLabel("No output folder selected (will use default: picking_dockets_output)\nFiles will be saved in a date-based subfolder (YYYY-MM-DD)")
+        self.output_folder_label = QLabel("Files will be saved in a date-based subfolder (YYYY-MM-DD)")
         self.output_folder_label.setObjectName("infoText")
         self.output_folder_label.setWordWrap(True)
         layout.addWidget(self.output_folder_label)
         
         # PDF files subsection
         pdf_label = QLabel("Picking Docket PDF Files:")
-        pdf_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        pdf_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
         layout.addWidget(pdf_label)
         
         # Button row
@@ -636,11 +616,11 @@ class DispatchScanningApp(QMainWindow):
         
         # PDF list
         self.picking_pdf_list = QListWidget()
-        self.picking_pdf_list.setMaximumHeight(120)
+        self.picking_pdf_list.setMaximumHeight(80)
         layout.addWidget(self.picking_pdf_list)
         
         # Info
-        info_label = QLabel("Processes picking dockets with REVERSED page order so first delivery stops are at the top of the pallet. Generates barcodes for order numbers from Excel Column A.")
+        info_label = QLabel("Expected Excel columns:\n• Column A: Order Number (→ ordernumber)\n• Column B: Item Code (→ itemcode)\n• Column C: Product Description (→ product_description)\n• Column D: Barcode (→ barcode)\n• Column E: Customer Type (→ customer_type)\n• Column F: Quantity (→ quantity)")
         info_label.setObjectName("infoText")
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -649,68 +629,7 @@ class DispatchScanningApp(QMainWindow):
         
         return section
     
-    def create_store_order_section(self):
-        """Create store order upload section"""
-        section = QFrame()
-        section.setObjectName("section")
 
-        layout = QVBoxLayout(section)
-        layout.setSpacing(15)
-        
-        # Section title
-        title = QLabel("2. Store Order Upload")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-        
-        # Description
-        desc_label = QLabel("Upload store order Excel files to dispatch_orders table in EXACT Excel row order")
-        desc_label.setObjectName("workflowInfo")
-        layout.addWidget(desc_label)
-        
-        # Excel files subsection
-        excel_label = QLabel("Store Order Excel Files:")
-        excel_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
-        layout.addWidget(excel_label)
-        
-        # Button row
-        btn_layout = QHBoxLayout()
-        self.add_store_order_btn = QPushButton("Add Excel Files")
-        self.add_store_order_btn.clicked.connect(self.browse_store_order_files)
-        
-        self.clear_store_order_btn = QPushButton("Clear")
-        self.clear_store_order_btn.setObjectName("secondaryButton")
-        self.clear_store_order_btn.clicked.connect(self.clear_store_order_files)
-        
-        btn_layout.addWidget(self.add_store_order_btn)
-        btn_layout.addWidget(self.clear_store_order_btn)
-        layout.addLayout(btn_layout)
-        
-        # Excel file list
-        self.store_order_file_list = QListWidget()
-        self.store_order_file_list.setMaximumHeight(120)
-        layout.addWidget(self.store_order_file_list)
-        
-        # Upload button
-        self.upload_store_order_btn = QPushButton("Upload to Supabase")
-        self.upload_store_order_btn.setObjectName("primaryButton")
-        self.upload_store_order_btn.clicked.connect(self.upload_store_orders_to_supabase)
-        layout.addWidget(self.upload_store_order_btn)
-        
-        # Column mapping info
-        mapping_info = QLabel("Expected Excel columns:\n• Column A: Order Number (→ ordernumber)\n• Column B: Item Code (→ itemcode)\n• Column C: Product Description (→ product_description)\n• Column D: Barcode (→ barcode)\n• Column E: Customer Type (→ customer_type)\n• Column F: Quantity (→ quantity)\n\n🔢 IMPORTANT: Excel row order is preserved for picking sequence!")
-        mapping_info.setObjectName("infoText")
-        mapping_info.setWordWrap(True)
-        layout.addWidget(mapping_info)
-        
-        # Status message
-        self.store_order_status_label = QLabel("Ready to upload store order files")
-        self.store_order_status_label.setObjectName("infoText")
-        self.store_order_status_label.setWordWrap(True)
-        layout.addWidget(self.store_order_status_label)
-        
-        layout.addStretch()
-        
-        return section
     
     def create_output_section(self):
         """Create output section"""
@@ -718,20 +637,11 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(15)
+        layout.setSpacing(10)
         
-        # Section title
-        title = QLabel("Output & Results")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+       
         
-        # Output directory info
-        output_info = QLabel("Processed files are saved to your selected output directory (or 'picking_dockets_output' if none selected) in a date-based subfolder (YYYY-MM-DD format). Each order number gets its own PDF with all matching pages and barcodes.")
-        output_info.setObjectName("infoText")
-        output_info.setWordWrap(True)
-        layout.addWidget(output_info)
-        
-        layout.addStretch()
+       
         
         return section
     
@@ -760,10 +670,10 @@ class DispatchScanningApp(QMainWindow):
     
     # NEW: Excel file handling methods
     def browse_excel_file(self):
-        """Browse for Excel file containing order numbers in column A"""
+        """Browse for Excel file containing store orders for database upload and barcode generation"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Excel File with Order Numbers (Column A)",
+            "Select Store Order Excel File (for database upload & barcodes)",
             str(Path.home()),
             "Excel files (*.xlsx *.xls);;All files (*.*)"
         )
@@ -809,7 +719,7 @@ class DispatchScanningApp(QMainWindow):
         )
         if folder_path:
             self.selected_output_folder = folder_path
-            self.output_folder_label.setText(f"Selected: {folder_path}\nFiles will be saved in a date-based subfolder (YYYY-MM-DD)")
+            self.output_folder_label.setText(f"Selected: {folder_path}")
             self.output_folder_label.setObjectName("successText")
             self.update_status(f"Output folder set to: {folder_path}")
     
@@ -820,142 +730,7 @@ class DispatchScanningApp(QMainWindow):
         self.output_folder_label.setObjectName("infoText")
         self.update_status("Output folder cleared - will use default location")
     
-    def browse_store_order_files(self):
-        """Browse for store order Excel files"""
-        file_paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select Store Order Excel Files",
-            str(Path.home()),
-            "Excel files (*.xlsx *.xls);;All files (*.*)"
-        )
-        if file_paths:
-            for file_path in file_paths:
-                if file_path not in self.selected_store_order_files:
-                    self.selected_store_order_files.append(file_path)
-                    self.store_order_file_list.addItem(Path(file_path).name)
-    
-    def clear_store_order_files(self):
-        """Clear selected store order Excel files"""
-        self.selected_store_order_files.clear()
-        self.store_order_file_list.clear()
-        self.store_order_status_label.setText("Ready to upload store order files")
-        self.store_order_status_label.setObjectName("infoText")
-        self.store_order_status_label.setStyleSheet("""
-            QLabel {
-                color: #64748b;
-                font-size: 12px;
-                padding: 8px;
-                background-color: #f1f5f9;
-                border-radius: 4px;
-            }
-        """)
-    
-    def upload_store_orders_to_supabase(self):
-        """Upload store order Excel files to Supabase"""
-        if not SUPABASE_AVAILABLE:
-            QMessageBox.critical(
-                self, 
-                "Supabase Unavailable", 
-                "Supabase configuration is not available. Please ensure supabase_config.py is in the project directory."
-            )
-            return
-            
-        if not self.selected_store_order_files:
-            QMessageBox.warning(self, "No Files Selected", "Please select store order Excel files first.")
-            return
-        
-        try:
-            self.update_status("Uploading store order files to Supabase in EXACT Excel row order...")
-            
-            success_count = 0
-            total_files = len(self.selected_store_order_files)
-            
-            for file_path in self.selected_store_order_files:
-                try:
-                    # Read Excel file maintaining row order
-                    self.update_status(f"Reading {Path(file_path).name} and preserving Excel row order...")
-                    df = pd.read_excel(file_path)
-                    
-                    # Convert DataFrame to list of dictionaries (preserves row order)
-                    store_order_data = df.to_dict('records')
-                    
-                    self.update_status(f"Uploading {len(store_order_data)} rows from {Path(file_path).name} in picking sequence order...")
-                    
-                    # Upload to Supabase using the function (order-preserving)
-                    success = upload_store_orders_from_excel(store_order_data, Path(file_path).name)
-                    
-                    if success:
-                        success_count += 1
-                        self.update_status(f"✅ Uploaded {Path(file_path).name} with Excel order preserved!")
-                    else:
-                        self.update_status(f"❌ Failed to upload {Path(file_path).name}")
-                except Exception as e:
-                    self.update_status(f"❌ Error uploading {Path(file_path).name}: {str(e)}")
-            
-            if success_count == total_files:
-                QMessageBox.information(
-                    self, 
-                    "Upload Complete", 
-                    f"Successfully uploaded all {success_count} store order files to Supabase!\n\n"
-                    f"🔢 Excel row order has been preserved for picking sequence.\n"
-                    f"📋 Store orders are now available in the dispatch_orders table.\n"
-                    f"⚠️  Items will be picked in the exact order they appear in your Excel file."
-                )
-                self.update_status(f"✅ Successfully uploaded {success_count} store order files with Excel order preserved")
-                
-                # Update status label
-                self.store_order_status_label.setText("✅ Store order files uploaded with Excel order preserved!")
-                self.store_order_status_label.setObjectName("successText")
-                self.store_order_status_label.setStyleSheet("""
-                    QLabel {
-                        color: #059669;
-                        font-size: 12px;
-                        padding: 8px;
-                        background-color: #d1fae5;
-                        border-radius: 4px;
-                        font-weight: 500;
-                    }
-                """)
-            else:
-                QMessageBox.warning(
-                    self, 
-                    "Upload Partially Complete", 
-                    f"Uploaded {success_count} out of {total_files} files successfully.\n\n"
-                    f"Check the status messages for details about failed uploads."
-                )
-                self.update_status(f"⚠️ Uploaded {success_count}/{total_files} store order files")
-                
-                # Update status label
-                self.store_order_status_label.setText(f"⚠️ Uploaded {success_count}/{total_files} files - see status for details")
-                self.store_order_status_label.setObjectName("warningText")
-                self.store_order_status_label.setStyleSheet("""
-                    QLabel {
-                        color: #d97706;
-                        font-size: 12px;
-                        padding: 8px;
-                        background-color: #fef3c7;
-                        border-radius: 4px;
-                        font-weight: 500;
-                    }
-                """)
-                
-        except Exception as e:
-            QMessageBox.critical(self, "Upload Error", f"Error uploading store order files: {str(e)}")
-            self.update_status(f"❌ Error uploading store order files: {str(e)}")
-            
-            # Update status label
-            self.store_order_status_label.setText(f"❌ Error uploading files: {str(e)}")
-            self.store_order_status_label.setObjectName("warningText")
-            self.store_order_status_label.setStyleSheet("""
-                QLabel {
-                    color: #dc2626;
-                    font-size: 12px;
-                    padding: 8px;
-                    background-color: #fee2e2;
-                    border-radius: 4px;
-                    font-weight: 500;
-                }
-            """)
+
     
     def open_output_directory(self, directory_path):
         """Open the output directory in file explorer"""
@@ -993,14 +768,17 @@ class DispatchScanningApp(QMainWindow):
     
     # Processing methods
     def process_picking_dockets(self):
-        """Process picking dockets with reversed page order"""
-        # NEW: Check for Excel file with order numbers
+        """Process picking dockets with reversed page order and upload Excel to database"""
+        # Check for Excel file with order numbers
         if not self.selected_excel_file or not self.excel_order_numbers:
             QMessageBox.warning(
                 self, 
                 "No Excel File", 
-                "Please select an Excel file with order numbers in Column A first.\n\n"
-                "The application needs this to know which order numbers to look for and generate barcodes."
+                "Please select a store order Excel file first.\n\n"
+                "The application needs this to:\n"
+                "• Upload store orders to database in exact Excel row order\n"
+                "• Generate barcodes for order numbers in Column A\n"
+                "• Match picking dockets to order numbers"
             )
             return
         
@@ -1008,8 +786,21 @@ class DispatchScanningApp(QMainWindow):
             QMessageBox.warning(self, "No Picking PDFs", "Please select picking docket PDF files to process.")
             return
         
+        # Check Supabase availability for database upload
+        if not SUPABASE_AVAILABLE:
+            reply = QMessageBox.question(
+                self, 
+                "Supabase Unavailable", 
+                "Supabase configuration is not available. The Excel file cannot be uploaded to the database.\n\n"
+                "Do you want to continue with picking docket processing only (no database upload)?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+        
         self.show_progress(True)
-        self.update_status("Processing picking dockets...")
+        self.update_status("Starting processing...")
         self.process_picking_btn.setEnabled(False)
         
         # Start background processing
@@ -1047,13 +838,40 @@ class DispatchScanningApp(QMainWindow):
                 QMessageBox.critical(self, "Processing Error", f"Error during picking dockets processing: {error_msg}")
 
     def process_picking_dockets_internal(self):
-        """Internal method for picking dockets processing with barcode generation from Excel order numbers"""
+        """Internal method for picking dockets processing with barcode generation and Excel upload"""
         import re
         from barcode import Code128
         from barcode.writer import ImageWriter
         import tempfile
         
         try:
+            # STEP 1: Upload Excel file to Supabase database first
+            if SUPABASE_AVAILABLE:
+                self.processing_thread.progress_signal.emit("📤 Uploading store order Excel file to database...")
+                
+                try:
+                    # Read Excel file maintaining row order
+                    self.processing_thread.progress_signal.emit(f"Reading {Path(self.selected_excel_file).name} and preserving Excel row order...")
+                    df = pd.read_excel(self.selected_excel_file)
+                    
+                    # Convert DataFrame to list of dictionaries (preserves row order)
+                    store_order_data = df.to_dict('records')
+                    
+                    self.processing_thread.progress_signal.emit(f"Uploading {len(store_order_data)} rows to dispatch_orders table in picking sequence order...")
+                    
+                    # Upload to Supabase using the function (order-preserving)
+                    success = upload_store_orders_from_excel(store_order_data, Path(self.selected_excel_file).name)
+                    
+                    if success:
+                        self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {Path(self.selected_excel_file).name} to database with Excel order preserved!")
+                    else:
+                        self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload {Path(self.selected_excel_file).name} to database - continuing with picking docket processing")
+                except Exception as e:
+                    self.processing_thread.progress_signal.emit(f"⚠️ Error uploading Excel file to database: {str(e)} - continuing with picking docket processing")
+            else:
+                self.processing_thread.progress_signal.emit("⚠️ Supabase not available - skipping database upload")
+            
+            # STEP 2: Continue with picking docket processing
             # Determine output directory - use selected folder or default
             if self.selected_output_folder:
                 base_output_dir = Path(self.selected_output_folder)
@@ -1362,7 +1180,9 @@ class DispatchScanningApp(QMainWindow):
                     continue
             
             # Final summary message
-            self.processing_thread.progress_signal.emit("Picking dockets processing complete!")
+            self.processing_thread.progress_signal.emit("Processing complete!")
+            if SUPABASE_AVAILABLE:
+                self.processing_thread.progress_signal.emit(f"📤 Uploaded Excel file to dispatch_orders database table with Excel row order preserved")
             self.processing_thread.progress_signal.emit(f"Created {len(created_files)} order-specific PDF files in {output_dir}")
             self.processing_thread.progress_signal.emit(f"📅 Files saved in date folder: {current_date}")
             self.processing_thread.progress_signal.emit(f"🏷️  Generated barcodes for {len(order_barcodes)} order numbers from Excel file")
@@ -1371,11 +1191,12 @@ class DispatchScanningApp(QMainWindow):
             # Generate summary report
             summary_path = output_dir / "picking_dockets_summary.txt"
             with open(summary_path, 'w', encoding='utf-8') as f:
-                f.write("Picking Dockets Processing Summary\n")
+                f.write("Dispatch Scanning Processing Summary\n")
                 f.write("=" * 50 + "\n\n")
                 f.write(f"Processing Date: {current_date}\n")
                 f.write(f"Output Directory: {output_dir}\n")
                 f.write(f"Excel file used: {Path(self.selected_excel_file).name}\n")
+                f.write(f"Database upload: {'✅ Success' if SUPABASE_AVAILABLE else '❌ Supabase not available'}\n")
                 f.write(f"Order numbers from Excel: {len(self.excel_order_numbers)}\n")
                 f.write(f"Total picking docket PDF files processed: {processed_files}\n")
                 f.write(f"Total pages scanned: {total_pages_processed}\n")
@@ -1384,7 +1205,11 @@ class DispatchScanningApp(QMainWindow):
                 if failed_files:
                     f.write(f"Failed PDF files: {len(failed_files)}\n")
                 f.write("\n")
-                f.write(f"📅 Files organized by date: All output files are saved in the {current_date} subfolder.\n")
+                f.write("WORKFLOW COMPLETED:\n")
+                f.write(f"1. 📤 Uploaded Excel file to dispatch_orders database table (Excel row order preserved)\n")
+                f.write(f"2. 🏷️  Generated barcodes for {len(order_barcodes)} order numbers from Excel Column A\n")
+                f.write(f"3. 📄 Created {len(created_files)} order-specific picking docket PDFs with barcodes\n")
+                f.write(f"4. 📅 Organized all files in date folder: {current_date}\n\n")
                 f.write("Each PDF contains all pages for a specific order number with barcodes at the top.\n")
                 f.write("Barcodes are generated for order numbers found in Excel Column A.\n\n")
                 
@@ -1425,7 +1250,9 @@ class DispatchScanningApp(QMainWindow):
                 "failed_files": failed_files,
                 "driver_details": order_details,  # Use order details instead of driver details
                 "output_dir": str(output_dir),
-                "barcodes_generated": len(order_barcodes)
+                "barcodes_generated": len(order_barcodes),
+                "database_upload": SUPABASE_AVAILABLE,
+                "excel_file": Path(self.selected_excel_file).name if self.selected_excel_file else "None"
             }
             
         except Exception as e:
@@ -1460,32 +1287,32 @@ class DispatchScanningApp(QMainWindow):
             
             QLabel#headerTitle {
                 color: white;
-                font-size: 28px;
+                font-size: 22px;
                 font-weight: bold;
             }
             
             QLabel#headerSubtitle {
                 color: #e2e8f0;
-                font-size: 16px;
+                font-size: 13px;
             }
             
             QFrame#section {
                 background-color: white;
                 border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                padding: 15px;
+                border-radius: 6px;
+                padding: 12px;
             }
             
             QLabel {
                 color: #374151;
-                font-size: 13px;
+                font-size: 12px;
             }
             
             QLabel#sectionTitle {
                 color: #1e293b;
-                font-size: 16px;
+                font-size: 14px;
                 font-weight: bold;
-                margin-bottom: 5px;
+                margin-bottom: 3px;
             }
             
             QLabel#workflowInfo {
@@ -1525,10 +1352,12 @@ class DispatchScanningApp(QMainWindow):
                 background-color: #e2e8f0;
                 color: #374151;
                 border: none;
-                padding: 8px 16px;
-                border-radius: 6px;
+                padding: 6px 12px;
+                border-radius: 4px;
                 font-weight: 500;
-                min-height: 20px;
+                min-height: 16px;
+                max-width: 200px;
+                font-size: 12px;
             }
             
             QPushButton:hover {
@@ -1555,11 +1384,11 @@ class DispatchScanningApp(QMainWindow):
             
             QLineEdit {
                 border: 1px solid #d1d5db;
-                border-radius: 6px;
-                padding: 8px 12px;
+                border-radius: 4px;
+                padding: 6px 10px;
                 background-color: white;
                 color: #374151;
-                font-size: 13px;
+                font-size: 12px;
             }
             
             QLineEdit:focus {
