@@ -548,31 +548,7 @@ class DispatchScanningApp(QMainWindow):
         
        
         
-        # Excel file with store orders subsection
-        excel_label = QLabel("Store Order Excel File (for barcodes & database upload):")
-        excel_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(excel_label)
-        
-        # Excel file selection row
-        excel_btn_layout = QHBoxLayout()
-        self.browse_excel_btn = QPushButton("Select Store Order Excel File")
-        self.browse_excel_btn.clicked.connect(self.browse_excel_file)
-        
-        self.clear_excel_btn = QPushButton("Clear")
-        self.clear_excel_btn.setObjectName("secondaryButton")
-        self.clear_excel_btn.clicked.connect(self.clear_excel_file)
-        
-        excel_btn_layout.addWidget(self.browse_excel_btn)
-        excel_btn_layout.addWidget(self.clear_excel_btn)
-        layout.addLayout(excel_btn_layout)
-        
-        # Excel file display
-        self.excel_file_label = QLabel("No Excel file selected")
-        self.excel_file_label.setObjectName("infoText")
-        self.excel_file_label.setWordWrap(True)
-        layout.addWidget(self.excel_file_label)
-        
-        # NEW: Output folder selection subsection
+        # Output folder selection subsection (moved to top)
         output_label = QLabel("Output Folder:")
         output_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
         layout.addWidget(output_label)
@@ -595,6 +571,30 @@ class DispatchScanningApp(QMainWindow):
         self.output_folder_label.setObjectName("infoText")
         self.output_folder_label.setWordWrap(True)
         layout.addWidget(self.output_folder_label)
+        
+        # Excel file with store orders subsection (moved after output folder)
+        excel_label = QLabel("Store Order Excel File (for barcodes & database upload):")
+        excel_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        layout.addWidget(excel_label)
+        
+        # Excel file selection row
+        excel_btn_layout = QHBoxLayout()
+        self.browse_excel_btn = QPushButton("Select Store Order Excel File")
+        self.browse_excel_btn.clicked.connect(self.browse_excel_file)
+        
+        self.clear_excel_btn = QPushButton("Clear")
+        self.clear_excel_btn.setObjectName("secondaryButton")
+        self.clear_excel_btn.clicked.connect(self.clear_excel_file)
+        
+        excel_btn_layout.addWidget(self.browse_excel_btn)
+        excel_btn_layout.addWidget(self.clear_excel_btn)
+        layout.addLayout(excel_btn_layout)
+        
+        # Excel file display
+        self.excel_file_label = QLabel("No Excel file selected")
+        self.excel_file_label.setObjectName("infoText")
+        self.excel_file_label.setWordWrap(True)
+        layout.addWidget(self.excel_file_label)
         
         # PDF files subsection
         pdf_label = QLabel("Picking Docket PDF Files:")
