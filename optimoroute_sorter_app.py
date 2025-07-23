@@ -596,6 +596,250 @@ class OptimoRouteApiThread(QThread):
             self.finished_signal.emit(False, [])
 
 
+class SettingsDialog(QDialog):
+    """Settings dialog for configuring API key"""
+    
+    def __init__(self, current_api_key="", parent=None):
+        super().__init__(parent)
+        self.current_api_key = current_api_key
+        self.setWindowTitle("Settings")
+        self.setModal(True)
+        self.resize(500, 300)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        # Title
+        title_label = QLabel("OptimoRoute API Configuration")
+        title_label.setObjectName("settingsTitle")
+        layout.addWidget(title_label)
+        
+        # API Key section
+        api_group = QGroupBox("API Key")
+        api_layout = QVBoxLayout(api_group)
+        
+        api_info = QLabel(
+            "Enter your OptimoRoute API key. You can find this in your OptimoRoute account settings."
+        )
+        api_info.setWordWrap(True)
+        api_info.setObjectName("infoText")
+        api_layout.addWidget(api_info)
+        
+        # API Key input
+        api_layout.addWidget(QLabel("API Key:"))
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setPlaceholderText("Enter your OptimoRoute API key...")
+        self.api_key_edit.setText(current_api_key)
+        self.api_key_edit.setEchoMode(QLineEdit.Password)  # Hide the API key
+        api_layout.addWidget(self.api_key_edit)
+        
+        # Show/Hide API key toggle
+        show_key_layout = QHBoxLayout()
+        self.show_key_checkbox = QCheckBox("Show API Key")
+        self.show_key_checkbox.toggled.connect(self.toggle_api_key_visibility)
+        show_key_layout.addWidget(self.show_key_checkbox)
+        show_key_layout.addStretch()
+        api_layout.addLayout(show_key_layout)
+        
+        layout.addWidget(api_group)
+        
+        # Help section
+        help_group = QGroupBox("How to get your API Key")
+        help_layout = QVBoxLayout(help_group)
+        
+        help_text = QLabel(
+            "1. Log in to your OptimoRoute account\n"
+            "2. Go to Settings → API\n"
+            "3. Generate a new API key or copy an existing one\n"
+            "4. Paste the key in the field above\n\n"
+            "Note: Keep your API key secure and don't share it with others."
+        )
+        help_text.setWordWrap(True)
+        help_text.setObjectName("helpText")
+        help_layout.addWidget(help_text)
+        
+        layout.addWidget(help_group)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        save_btn.setObjectName("primaryButton")
+        save_btn.clicked.connect(self.accept)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        
+        
+        button_layout.addStretch()
+        button_layout.addWidget(cancel_btn)
+        button_layout.addWidget(save_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Apply styling
+        self.apply_settings_styling()
+    
+    def toggle_api_key_visibility(self, show):
+        """Toggle API key visibility"""
+        if show:
+            self.api_key_edit.setEchoMode(QLineEdit.Normal)
+        else:
+            self.api_key_edit.setEchoMode(QLineEdit.Password)
+    
+    def test_api_connection(self):
+        """Test the API connection with the provided key"""
+        api_key = self.api_key_edit.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "No API Key", "Please enter an API key to test.")
+            return
+        
+        # Show testing message
+        QMessageBox.information(self, "Testing Connection", 
+                               "Testing API connection... This may take a few seconds.")
+        
+        # Test the connection in a background thread
+        test_thread = ApiTestThread(api_key)
+        test_thread.finished_signal.connect(self.on_test_finished)
+        test_thread.start()
+    
+    def on_test_finished(self, success, message):
+        """Handle API test completion"""
+        if success:
+            QMessageBox.information(self, "Connection Successful", 
+                                   f"API connection test successful!\n\n{message}")
+        else:
+            QMessageBox.critical(self, "Connection Failed", 
+                                f"API connection test failed:\n\n{message}")
+    
+    def get_api_key(self):
+        """Get the entered API key"""
+        return self.api_key_edit.text().strip()
+    
+    def apply_settings_styling(self):
+        """Apply styling to settings dialog"""
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8fafc;
+            }
+            
+            QLabel#settingsTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #1e293b;
+                margin-bottom: 10px;
+            }
+            
+            QGroupBox {
+                font-weight: bold;
+                color: #374151;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+            }
+            
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 8px 0 8px;
+                background-color: #f8fafc;
+            }
+            
+            QLabel#infoText, QLabel#helpText {
+                color: #64748b;
+                font-size: 12px;
+                padding: 8px;
+                background-color: #f1f5f9;
+                border-radius: 4px;
+                font-weight: normal;
+            }
+            
+            QLineEdit {
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 8px 12px;
+                background-color: white;
+                color: #374151;
+                font-size: 13px;
+            }
+            
+            QLineEdit:focus {
+                border-color: #2563eb;
+            }
+            
+            QCheckBox {
+                color: #374151;
+                font-size: 13px;
+            }
+            
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #d1d5db;
+                border-radius: 3px;
+                background-color: white;
+            }
+            
+            QCheckBox::indicator:checked {
+                background-color: #2563eb;
+                border-color: #2563eb;
+            }
+            
+            QCheckBox::indicator:checked::after {
+                content: "✓";
+                color: white;
+                font-weight: bold;
+                font-size: 12px;
+            }
+        """)
+
+
+class ApiTestThread(QThread):
+    """Background thread for testing API connection"""
+    finished_signal = Signal(bool, str)
+    
+    def __init__(self, api_key):
+        super().__init__()
+        self.api_key = api_key
+    
+    def run(self):
+        try:
+            headers = {'Content-Type': 'application/json'}
+            url = "https://api.optimoroute.com/v1/search_orders"
+            params = {'key': self.api_key}
+            
+            # Simple test request
+            request_body = {
+                "dateRange": {
+                    "from": "2024-01-01",
+                    "to": "2024-01-01"
+                },
+                "includeOrderData": False,
+                "includeScheduleInformation": False
+            }
+            
+            response = requests.post(
+                url, 
+                headers=headers, 
+                params=params,
+                json=request_body,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                self.finished_signal.emit(True, "API key is valid and connection successful.")
+            elif response.status_code == 401:
+                self.finished_signal.emit(False, "Invalid API key. Please check your key and try again.")
+            else:
+                self.finished_signal.emit(False, f"API returned status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.finished_signal.emit(False, f"Network error: {str(e)}")
+        except Exception as e:
+            self.finished_signal.emit(False, f"Error: {str(e)}")
+
+
 class OptimoRouteSorterApp(QMainWindow):
     """OptimoRoute Sorter Application for Delivery Processing"""
     
@@ -611,7 +855,7 @@ class OptimoRouteSorterApp(QMainWindow):
         self.processing_thread = None
         
         # OptimoRoute API setup
-        self.api_key = "3ac9317b7972340ccf529ef24f9374fbfYhFnF5FyX4"
+        self.api_key = self.load_api_key()
         self.optimoroute_thread = None
         self.scheduled_orders_data = []
         
@@ -641,7 +885,7 @@ class OptimoRouteSorterApp(QMainWindow):
         # Main layout
         main_layout = QVBoxLayout(central_widget)
         main_layout.setSpacing(20)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(0, 0, 0, 20)
         
         # Header
         header_frame = self.create_header()
@@ -686,12 +930,34 @@ class OptimoRouteSorterApp(QMainWindow):
     
     def create_header(self):
         """Create application header"""
-        header_frame = QFrame()
-        header_frame.setObjectName("headerFrame")
-        header_frame.setFixedHeight(80)
+        header_widget = QWidget()
+        header_widget.setObjectName("headerWidget")
+        header_widget.setFixedHeight(80)
         
-        layout = QHBoxLayout(header_frame)
+        layout = QHBoxLayout(header_widget)
         layout.setContentsMargins(0, 15, 0, 15)
+        
+        # Add left margin for refresh button
+        layout.addSpacing(20)
+        
+        # Refresh button
+        refresh_btn = QPushButton("🔄")
+        refresh_btn.setObjectName("refreshButton")
+        refresh_btn.setToolTip("Refresh data from OptimoRoute API")
+        refresh_btn.clicked.connect(self.refresh_data)
+        refresh_btn.setFixedSize(40, 40)
+        layout.addWidget(refresh_btn)
+        
+        # Settings button
+        settings_btn = QPushButton("⚙")
+        settings_btn.setObjectName("settingsButton")
+        settings_btn.setToolTip("Settings - Configure API Key")
+        settings_btn.clicked.connect(self.open_settings)
+        settings_btn.setFixedSize(40, 40)
+        layout.addWidget(settings_btn)
+        
+        # Spacer between buttons and title
+        layout.addSpacing(15)
         
         title_label = QLabel("OptimoRoute Sorter")
         title_label.setObjectName("headerTitle")
@@ -703,7 +969,10 @@ class OptimoRouteSorterApp(QMainWindow):
         subtitle_label.setObjectName("headerSubtitle")
         layout.addWidget(subtitle_label)
         
-        return header_frame
+        # Add right margin for subtitle
+        layout.addSpacing(20)
+        
+        return header_widget
     
     def create_setup_section(self):
         """Create setup section"""
@@ -1118,6 +1387,13 @@ class OptimoRouteSorterApp(QMainWindow):
             QMessageBox.information(self, "In Progress", "Already fetching orders. Please wait...")
             return
         
+        # Check if API key is configured
+        if not self.api_key:
+            QMessageBox.warning(self, "No API Key", 
+                               "Please configure your OptimoRoute API key in Settings first.")
+            self.open_settings()
+            return
+        
         # Validate date selection
         if not self.validate_date_selection():
             return
@@ -1197,6 +1473,54 @@ class OptimoRouteSorterApp(QMainWindow):
         # Apply style updates
         self.api_status_label.style().unpolish(self.api_status_label)
         self.api_status_label.style().polish(self.api_status_label)
+    
+    def refresh_data(self):
+        """Refresh data from OptimoRoute API using current settings"""
+        if self.optimoroute_thread and self.optimoroute_thread.isRunning():
+            QMessageBox.information(self, "In Progress", "Already fetching orders. Please wait...")
+            return
+        
+        # Check if we have a date selected
+        if not self.fetch_date.date().isValid():
+            QMessageBox.warning(self, "No Date Selected", "Please select a date first.")
+            return
+        
+        # Automatically trigger the fetch and load process
+        self.fetch_and_load_scheduled_deliveries()
+    
+    def open_settings(self):
+        """Open settings dialog to configure API key"""
+        dialog = SettingsDialog(self.api_key, self)
+        if dialog.exec() == QDialog.Accepted:
+            new_api_key = dialog.get_api_key()
+            if new_api_key != self.api_key:
+                self.api_key = new_api_key
+                self.save_api_key(new_api_key)
+                self.update_status("API key updated successfully")
+    
+    def load_api_key(self):
+        """Load API key from configuration file"""
+        config_file = "api_config.json"
+        try:
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return config.get('api_key', '')
+            return ''
+        except Exception as e:
+            print(f"Error loading API key: {e}")
+            return ''
+    
+    def save_api_key(self, api_key):
+        """Save API key to configuration file"""
+        config_file = "api_config.json"
+        try:
+            config = {'api_key': api_key}
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error saving API key: {e}")
+            QMessageBox.warning(self, "Save Error", f"Could not save API key: {str(e)}")
     
     # Processing methods
     def process_all_pdfs_and_packing(self):
@@ -1438,11 +1762,13 @@ class OptimoRouteSorterApp(QMainWindow):
                 
                 try:
                     # Create new PDF for this driver
-                    output_filename = f"Driver_{driver_number}_Orders.pdf"
+                    # Count unique orders for this driver
+                    unique_orders = len(set(page_info['order_id'] for page_info in pages))
+                    output_filename = f"Driver_{driver_number}_{unique_orders}_Orders.pdf"
                     output_path = output_dir / output_filename
                     
                     self.processing_thread.progress_signal.emit(
-                        f"Creating {output_filename} with {len(pages)} pages..."
+                        f"Creating {output_filename} with {len(pages)} pages ({unique_orders} unique orders)..."
                     )
                     
                     new_pdf = fitz.open()
@@ -1496,7 +1822,9 @@ class OptimoRouteSorterApp(QMainWindow):
                         )
                         
                 except Exception as e:
-                    failed_files.append(f"Driver_{driver_number}_Orders.pdf")
+                    # Count unique orders for error message
+                    unique_orders = len(set(page_info['order_id'] for page_info in pages))
+                    failed_files.append(f"Driver_{driver_number}_{unique_orders}_Orders.pdf")
                     self.processing_thread.progress_signal.emit(
                         f"✗ Error creating PDF for Driver {driver_number}: {str(e)}"
                     )
@@ -1585,9 +1913,8 @@ class OptimoRouteSorterApp(QMainWindow):
                 background-color: #f8fafc;
             }
             
-            QFrame#headerFrame {
+            QWidget#headerWidget {
                 background-color: #2563eb;
-                border-radius: 8px;
                 margin-bottom: 10px;
             }
             
@@ -1600,6 +1927,46 @@ class OptimoRouteSorterApp(QMainWindow):
             QLabel#headerSubtitle {
                 color: #e2e8f0;
                 font-size: 16px;
+            }
+            
+            QPushButton#refreshButton {
+                background-color: white;
+                color: #2563eb;
+                border: 2px solid rgba(255, 255, 255, 0.8);
+                border-radius: 20px;
+                font-size: 18px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            
+            QPushButton#refreshButton:hover {
+                background-color: #f8fafc;
+                border-color: white;
+            }
+            
+            QPushButton#refreshButton:pressed {
+                background-color: #e2e8f0;
+                border-color: white;
+            }
+            
+            QPushButton#settingsButton {
+                background-color: white;
+                color: #2563eb;
+                border: 2px solid rgba(255, 255, 255, 0.8);
+                border-radius: 20px;
+                font-size: 18px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            
+            QPushButton#settingsButton:hover {
+                background-color: #f8fafc;
+                border-color: white;
+            }
+            
+            QPushButton#settingsButton:pressed {
+                background-color: #e2e8f0;
+                border-color: white;
             }
             
             QFrame#section {
