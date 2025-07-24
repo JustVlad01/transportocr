@@ -846,6 +846,14 @@ class OptimoRouteSorterApp(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        # Set application icon
+        try:
+            icon_path = "application_icon.ico" 
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+        except Exception as e:
+            print(f"Could not load application icon: {e}")
+        
         # Application data
         self.delivery_data_values = []
         self.delivery_data_with_drivers = {}
