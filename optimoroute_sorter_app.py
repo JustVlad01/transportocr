@@ -73,6 +73,9 @@ class ProcessingResultsDialog(QDialog):
         elif results.get('failed_files'):
             status_icon = "⚠"
             status_color = "#f59e0b"
+        elif results.get('missing_order_ids'):
+            status_icon = "⚠"
+            status_color = "#f59e0b"
         
         status_label = QLabel(status_icon)
         status_label.setStyleSheet(f"font-size: 32px; color: {status_color}; font-weight: bold;")
@@ -84,6 +87,8 @@ class ProcessingResultsDialog(QDialog):
             title_text = "PDF Processing Completed - No Matching Orders Found"
         elif results.get('failed_files'):
             title_text = "PDF Processing Completed with Some Issues"
+        elif results.get('missing_order_ids'):
+            title_text = "PDF Processing Completed - Some Orders Missing"
         
         title_label = QLabel(title_text)
         title_label.setObjectName("resultTitle")
@@ -104,6 +109,18 @@ class ProcessingResultsDialog(QDialog):
             ("Driver PDFs Created", str(results.get('driver_files_created', 0))),
             ("Failed Files", str(len(results.get('failed_files', []))))
         ]
+        
+        # Add order matching statistics if available
+        if results.get('total_order_ids'):
+            total_orders = results.get('total_order_ids', 0)
+            found_orders = len(results.get('found_order_ids', []))
+            missing_orders = len(results.get('missing_order_ids', []))
+            
+            stats_data.extend([
+                ("Total Orders in Data", str(total_orders)),
+                ("Orders Found in PDFs", str(found_orders)),
+                ("Orders Missing from PDFs", str(missing_orders))
+            ])
         
         for i, (label, value) in enumerate(stats_data):
             label_widget = QLabel(label + ":")
@@ -129,7 +146,12 @@ class ProcessingResultsDialog(QDialog):
             driver_tab = self.create_driver_tab(results.get('driver_details', {}))
             tab_widget.addTab(driver_tab, "Driver Details")
         
-        # Tab 3: Failed Files (if any)
+        # Tab 3: Missing Orders (if any)
+        if results.get('missing_order_ids'):
+            missing_tab = self.create_missing_tab(results.get('missing_order_ids', []), results.get('delivery_data_with_drivers', {}))
+            tab_widget.addTab(missing_tab, "Missing Orders")
+        
+        # Tab 4: Failed Files (if any)
         if results.get('failed_files'):
             failed_tab = self.create_failed_tab(results.get('failed_files', []))
             tab_widget.addTab(failed_tab, "Failed Files")
@@ -244,6 +266,61 @@ class ProcessingResultsDialog(QDialog):
         
         return widget
     
+    def create_missing_tab(self, missing_order_ids, delivery_data_with_drivers):
+        """Create tab showing missing order IDs"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Summary info
+        summary_label = QLabel(f"Missing Orders: {len(missing_order_ids)} order IDs not found in PDF files")
+        summary_label.setObjectName("missingSummary")
+        layout.addWidget(summary_label)
+        
+        # Table
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["Order ID", "Driver", "Stop Number", "Status"])
+        table.setRowCount(len(missing_order_ids))
+        
+        for i, order_id in enumerate(sorted(missing_order_ids)):
+            # Order ID
+            order_item = QTableWidgetItem(str(order_id))
+            order_item.setFlags(order_item.flags() & ~Qt.ItemIsEditable)
+            table.setItem(i, 0, order_item)
+            
+            # Driver
+            driver_data = delivery_data_with_drivers.get(order_id, {})
+            driver_name = driver_data.get('driver_number', 'Unknown')
+            driver_item = QTableWidgetItem(str(driver_name))
+            driver_item.setFlags(driver_item.flags() & ~Qt.ItemIsEditable)
+            table.setItem(i, 1, driver_item)
+            
+            # Stop Number
+            stop_number = driver_data.get('stop_number', 'Unknown')
+            stop_item = QTableWidgetItem(str(stop_number))
+            stop_item.setFlags(stop_item.flags() & ~Qt.ItemIsEditable)
+            table.setItem(i, 2, stop_item)
+            
+            # Status
+            status_item = QTableWidgetItem("❌ Missing")
+            status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+            table.setItem(i, 3, status_item)
+        
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table)
+        
+        # Export button
+        export_layout = QHBoxLayout()
+        export_btn = QPushButton("Export Missing Orders List")
+        export_btn.setObjectName("secondaryButton")
+        export_btn.clicked.connect(lambda: self.export_missing_orders(missing_order_ids, delivery_data_with_drivers))
+        export_layout.addWidget(export_btn)
+        export_layout.addStretch()
+        layout.addLayout(export_layout)
+        
+        return widget
+    
     def create_failed_tab(self, failed_files):
         """Create tab showing failed files"""
         widget = QWidget()
@@ -324,6 +401,50 @@ class ProcessingResultsDialog(QDialog):
         """Open output folder"""
         if hasattr(self.parent(), 'open_output_directory'):
             self.parent().open_output_directory(self.results.get('output_dir', ''))
+    
+    def export_missing_orders(self, missing_order_ids, delivery_data_with_drivers):
+        """Export missing orders to a text file"""
+        try:
+            from PySide6.QtWidgets import QFileDialog
+            from pathlib import Path
+            
+            # Get save location
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Missing Orders",
+                str(Path.home() / "missing_orders.txt"),
+                "Text files (*.txt);;All files (*.*)"
+            )
+            
+            if file_path:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write("Missing Orders Report\n")
+                    f.write("=" * 50 + "\n\n")
+                    f.write(f"Total missing orders: {len(missing_order_ids)}\n")
+                    f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                    f.write("Missing Order Details:\n")
+                    f.write("-" * 30 + "\n")
+                    
+                    for order_id in sorted(missing_order_ids):
+                        driver_data = delivery_data_with_drivers.get(order_id, {})
+                        driver_name = driver_data.get('driver_number', 'Unknown')
+                        stop_number = driver_data.get('stop_number', 'Unknown')
+                        f.write(f"Order ID: {order_id}\n")
+                        f.write(f"  Driver: {driver_name}\n")
+                        f.write(f"  Stop Number: {stop_number}\n")
+                        f.write("\n")
+                
+                QMessageBox.information(
+                    self,
+                    "Export Successful",
+                    f"Missing orders list exported to:\n{file_path}"
+                )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Failed to export missing orders: {str(e)}"
+            )
     
     def apply_results_styling(self):
         """Apply styling to results dialog"""
@@ -429,6 +550,17 @@ class ProcessingResultsDialog(QDialog):
                 padding: 10px;
                 font-weight: 600;
                 color: #374151;
+            }
+            
+            QLabel#missingSummary {
+                font-size: 16px;
+                font-weight: bold;
+                color: #dc2626;
+                padding: 10px;
+                background-color: #fef2f2;
+                border: 1px solid #fecaca;
+                border-radius: 6px;
+                margin-bottom: 10px;
             }
         """)
 
@@ -1644,6 +1776,9 @@ class OptimoRouteSorterApp(QMainWindow):
         """Internal method for PDF processing"""
         import re
         
+        # Get delivery data for summary generation
+        delivery_data_with_drivers = self.delivery_data_with_drivers
+        
         try:
             output_dir = Path(self.output_dir_edit.text())
             output_dir.mkdir(exist_ok=True)
@@ -1652,6 +1787,10 @@ class OptimoRouteSorterApp(QMainWindow):
             driver_pages = {}
             processed_files = 0
             total_pages_processed = 0
+            
+            # Track found and missing order IDs
+            found_order_ids = set()
+            missing_order_ids = set()
             
             self.processing_thread.progress_signal.emit("Starting PDF processing...")
             self.processing_thread.progress_signal.emit(f"Processing {len(self.selected_pdf_files)} PDF files...")
@@ -1708,6 +1847,7 @@ class OptimoRouteSorterApp(QMainWindow):
                             if delivery_order_id.upper() in page_text.upper():
                                 order_id = delivery_order_id  # Use the exact case from delivery data
                                 matched_order_id = delivery_order_id
+                                found_order_ids.add(delivery_order_id)  # Track found order
                                 self.processing_thread.progress_signal.emit(
                                     f"✅ Found exact match: '{delivery_order_id}' on page {page_num + 1}"
                                 )
@@ -1721,6 +1861,7 @@ class OptimoRouteSorterApp(QMainWindow):
                                 if re.search(pattern, page_text, re.IGNORECASE):
                                     order_id = delivery_order_id
                                     matched_order_id = delivery_order_id
+                                    found_order_ids.add(delivery_order_id)  # Track found order
                                     self.processing_thread.progress_signal.emit(
                                         f"✅ Found word boundary match: '{delivery_order_id}' on page {page_num + 1}"
                                     )
@@ -1799,6 +1940,24 @@ class OptimoRouteSorterApp(QMainWindow):
                     if 'pdf_document' in locals():
                         pdf_document.close()
                     continue
+            
+            # Calculate missing order IDs
+            all_order_ids = set(self.delivery_data_with_drivers.keys())
+            missing_order_ids = all_order_ids - found_order_ids
+            
+            # Report missing orders
+            if missing_order_ids:
+                self.processing_thread.progress_signal.emit(f"⚠ MISSING ORDERS: {len(missing_order_ids)} order IDs not found in PDF files")
+                self.processing_thread.progress_signal.emit("Missing Order IDs:")
+                for missing_id in sorted(missing_order_ids):
+                    driver_info = self.delivery_data_with_drivers.get(missing_id, {})
+                    driver_name = driver_info.get('driver_number', 'Unknown')
+                    stop_number = driver_info.get('stop_number', 'Unknown')
+                    self.processing_thread.progress_signal.emit(f"  - {missing_id} (Driver: {driver_name}, Stop: {stop_number})")
+            else:
+                self.processing_thread.progress_signal.emit("✅ All order IDs from delivery data were found in PDF files!")
+            
+            self.processing_thread.progress_signal.emit(f"📊 Summary: Found {len(found_order_ids)}/{len(all_order_ids)} order IDs")
             
             # Create separate PDF files for each driver
             self.processing_thread.progress_signal.emit("Creating driver-specific PDF files...")
@@ -1914,6 +2073,13 @@ class OptimoRouteSorterApp(QMainWindow):
                     f.write(f"Failed PDF files: {len(failed_files)}\n")
                 f.write("\n")
                 
+                # Order matching summary
+                f.write("Order Matching Summary:\n")
+                f.write(f"  Total orders in delivery data: {len(all_order_ids)}\n")
+                f.write(f"  Orders found in PDF files: {len(found_order_ids)}\n")
+                f.write(f"  Orders missing from PDF files: {len(missing_order_ids)}\n")
+                f.write("\n")
+                
                 if created_files:
                     f.write("✓ Successfully Created PDF Files:\n")
                     for filename in created_files:
@@ -1924,6 +2090,16 @@ class OptimoRouteSorterApp(QMainWindow):
                     f.write("✗ Failed PDF Files:\n")
                     for filename in failed_files:
                         f.write(f"  - {filename}\n")
+                    f.write("\n")
+                
+                if missing_order_ids:
+                    f.write("❌ Missing Orders (not found in PDF files):\n")
+                    for order_id in sorted(missing_order_ids):
+                        # Get driver info from the delivery data
+                        driver_info = delivery_data_with_drivers.get(order_id, {})
+                        driver_name = driver_info.get('driver_number', 'Unknown')
+                        stop_number = driver_info.get('stop_number', 'Unknown')
+                        f.write(f"  - {order_id} (Driver: {driver_name}, Stop: {stop_number})\n")
                     f.write("\n")
                 
                 f.write("Driver Page Counts:\n")
@@ -1954,7 +2130,11 @@ class OptimoRouteSorterApp(QMainWindow):
                 "created_files": created_files,
                 "failed_files": failed_files,
                 "driver_details": driver_details,
-                "output_dir": str(output_dir)
+                "output_dir": str(output_dir),
+                "found_order_ids": list(found_order_ids),
+                "missing_order_ids": list(missing_order_ids),
+                "total_order_ids": len(all_order_ids),
+                "delivery_data_with_drivers": delivery_data_with_drivers
             }
             
         except Exception as e:
