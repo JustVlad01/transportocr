@@ -24,8 +24,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QListWidget, QTableWidget, QTableWidgetItem,
     QHeaderView, QPlainTextEdit, QCheckBox, QTabWidget, QDateEdit
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QDate
-from PySide6.QtGui import QFont, QPalette, QColor, QIcon, QPixmap
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QDate, QPropertyAnimation, QEasingCurve, QRect
+from PySide6.QtGui import QFont, QPalette, QColor, QIcon, QPixmap, QPainter, QRegion
 
 
 class ProcessingThread(QThread):
@@ -555,7 +555,7 @@ class OptimoRouteApiThread(QThread):
                 request_body["driverName"] = self.driver_filter.strip()
                 self.progress_signal.emit(f"Filtering by driver: {self.driver_filter.strip()}")
             else:
-                self.progress_signal.emit("Fetching orders for all drivers")
+                self.progress_signal.emit("")
             
             url = f"{self.base_url}/search_orders"
             params = {'key': self.api_key}
@@ -663,7 +663,7 @@ class OptimoRouteApiThread(QThread):
                 self.finished_signal.emit(True, [])  # Return empty list instead of sample data
                 return
             
-            self.progress_signal.emit(f"Successfully fetched {len(orders)} orders")
+            self.progress_signal.emit(f"")
             self.finished_signal.emit(True, orders)
             
         except Exception as e:
@@ -738,6 +738,11 @@ class SettingsDialog(QDialog):
         
         # Buttons
         button_layout = QHBoxLayout()
+        
+        clear_btn = QPushButton("Clear API Key")
+        clear_btn.setObjectName("dangerButton")
+        clear_btn.clicked.connect(self.clear_api_key)
+        
         save_btn = QPushButton("Save")
         save_btn.setObjectName("primaryButton")
         save_btn.clicked.connect(self.accept)
@@ -745,7 +750,7 @@ class SettingsDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         
-        
+        button_layout.addWidget(clear_btn)
         button_layout.addStretch()
         button_layout.addWidget(cancel_btn)
         button_layout.addWidget(save_btn)
@@ -786,6 +791,20 @@ class SettingsDialog(QDialog):
         else:
             QMessageBox.critical(self, "Connection Failed", 
                                 f"API connection test failed:\n\n{message}")
+    
+    def clear_api_key(self):
+        """Clear the API key field"""
+        reply = QMessageBox.question(
+            self,
+            "Clear API Key",
+            "Are you sure you want to clear the API key?\n\n"
+            "This will require you to enter a new API key before using the application.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.api_key_edit.clear()
     
     def get_api_key(self):
         """Get the entered API key"""
@@ -867,6 +886,20 @@ class SettingsDialog(QDialog):
                 font-weight: bold;
                 font-size: 12px;
             }
+            
+            QPushButton#dangerButton {
+                background-color: #dc2626;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-weight: 500;
+                min-height: 20px;
+            }
+            
+            QPushButton#dangerButton:hover {
+                background-color: #b91c1c;
+            }
         """)
 
 
@@ -942,6 +975,24 @@ class OptimoRouteSorterApp(QMainWindow):
         self.optimoroute_thread = None
         self.scheduled_orders_data = []
         
+        # Check if API key is configured before proceeding
+        if not self.api_key:
+            # Initialize UI first for the API key screen
+            self.init_ui()
+            self.apply_clean_styling()
+            self.show_api_key_screen()
+            return  # Exit initialization if no API key provided
+        
+        # Auto-refresh timer setup
+        self.auto_refresh_timer = QTimer()
+        self.auto_refresh_timer.timeout.connect(self.auto_refresh_data)
+        self.auto_refresh_enabled = True
+        self.auto_refresh_timer.start(2000)  # 5 seconds
+        
+        # Data change tracking
+        self.last_data_hash = None
+        self.last_order_count = 0
+        
         # Initialize UI
         self.init_ui()
         self.apply_clean_styling()
@@ -960,7 +1011,84 @@ class OptimoRouteSorterApp(QMainWindow):
         
         # Set initial status if no existing data
         if not self.delivery_data_values:
-            self.update_status("Ready - Select date range and fetch scheduled deliveries to begin")
+            self.update_status("Ready - Auto-refresh enabled, checking for changes")
+        
+        # Setup window animation
+        self.setup_window_animation()
+    
+    def setup_window_animation(self):
+        """Setup the window opening animation - reveal content from top to bottom"""
+        # Set initial opacity to 0 (invisible)
+        self.setWindowOpacity(0.0)
+        
+        # Get the current window geometry
+        current_geometry = self.geometry()
+        final_width = current_geometry.width()
+        final_height = current_geometry.height()
+        
+        # Set window to final position and size
+        self.resize(final_width, final_height)
+        
+        # Initialize reveal progress
+        self.reveal_progress = 0.0
+        
+        # Create fade-in animation
+        self.fade_animation = QPropertyAnimation(self, b"windowOpacity")
+        self.fade_animation.setDuration(800)  # 800ms duration
+        self.fade_animation.setStartValue(0.0)
+        self.fade_animation.setEndValue(1.0)
+        self.fade_animation.setEasingCurve(QEasingCurve.OutCubic)  # Smooth easing
+        
+        # Create reveal timer for progressive reveal
+        self.reveal_timer = QTimer()
+        self.reveal_timer.timeout.connect(self.update_reveal_progress)
+        self.reveal_steps = 40  # Number of steps for smooth reveal
+        self.reveal_step = 0
+        
+        # Start animations after a short delay
+        QTimer.singleShot(100, lambda: self.fade_animation.start())
+        QTimer.singleShot(100, lambda: self.reveal_timer.start(20))  # 20ms intervals
+    
+    def update_reveal_progress(self):
+        """Update the reveal progress using timer-based animation"""
+        self.reveal_step += 1
+        
+        # Calculate progress using easing curve (OutCubic)
+        progress = self.reveal_step / self.reveal_steps
+        if progress > 1.0:
+            progress = 1.0
+        
+        # Apply easing curve (OutCubic: t^3)
+        eased_progress = 1 - (1 - progress) ** 3
+        
+        self.reveal_progress = eased_progress
+        self.update_reveal_mask()
+        
+        # Stop timer when complete
+        if self.reveal_step >= self.reveal_steps:
+            self.reveal_timer.stop()
+            # Remove mask when animation is complete
+            self.setMask(QRegion())
+    
+    def update_reveal_mask(self):
+        """Update the window mask to reveal content from top to bottom"""
+        if not hasattr(self, 'reveal_progress'):
+            return
+            
+        progress = self.reveal_progress
+        window_height = self.height()
+        window_width = self.width()
+        
+        # Calculate how much of the window should be visible
+        visible_height = int(window_height * progress)
+        
+        if visible_height > 0:
+            # Create a region that shows only the top portion of the window
+            reveal_region = QRegion(0, 0, window_width, visible_height)
+            self.setMask(reveal_region)
+        else:
+            # Hide the entire window
+            self.setMask(QRegion())
     
     def init_ui(self):
         """Initialize the user interface"""
@@ -1030,12 +1158,12 @@ class OptimoRouteSorterApp(QMainWindow):
         layout.addSpacing(20)
         
         # Refresh button
-        refresh_btn = QPushButton("🔄")
-        refresh_btn.setObjectName("refreshButton")
-        refresh_btn.setToolTip("Refresh data from OptimoRoute API")
-        refresh_btn.clicked.connect(self.refresh_data)
-        refresh_btn.setFixedSize(40, 40)
-        layout.addWidget(refresh_btn)
+        self.refresh_btn = QPushButton("🔄")
+        self.refresh_btn.setObjectName("refreshButton")
+        self.refresh_btn.clicked.connect(self.refresh_data)
+        self.refresh_btn.setFixedSize(40, 40)
+        self.refresh_btn.setToolTip("Manual refresh - fetch latest data from OptimoRoute")
+        layout.addWidget(self.refresh_btn)
         
         # Settings button
         settings_btn = QPushButton("⚙")
@@ -1094,46 +1222,18 @@ class OptimoRouteSorterApp(QMainWindow):
         layout.addWidget(QLabel("Select Date for Scheduled Orders:"))
         
         # Single date picker
-        date_layout = QHBoxLayout()
-        date_layout.addWidget(QLabel("Date:"))
         self.fetch_date = QDateEdit()
         self.fetch_date.setDate(QDate.currentDate())  # Default to today
         self.fetch_date.setCalendarPopup(True)
         self.fetch_date.setDisplayFormat("yyyy-MM-dd")
         self.fetch_date.dateChanged.connect(self.on_date_changed)
-        date_layout.addWidget(self.fetch_date)
-        layout.addLayout(date_layout)
+        layout.addWidget(self.fetch_date)
         
         # Spacer
         layout.addSpacing(10)
         
-        # Driver filter
-        layout.addWidget(QLabel("Filter by Driver (Optional):"))
-        self.driver_filter = QComboBox()
-        self.driver_filter.addItem("All Drivers")  # Default option
-        self.driver_filter.setEditable(True)  # Allow custom driver input
-        self.driver_filter.setPlaceholderText("Select or enter driver name/ID")
-        layout.addWidget(self.driver_filter)
-        
-        # Spacer
-        layout.addSpacing(10)
-        
-        # Fetch and Load from Scheduled Deliveries button with API status
-        fetch_layout = QHBoxLayout()
-        
-        self.fetch_and_load_btn = QPushButton("🔄 Fetch & Load Scheduled Deliveries")
-        self.fetch_and_load_btn.setObjectName("primaryButton")
-        self.fetch_and_load_btn.clicked.connect(self.fetch_and_load_scheduled_deliveries)
-        fetch_layout.addWidget(self.fetch_and_load_btn)
-        
-        fetch_layout.addStretch()
-        
-        # API Status indicator
-        self.api_status_label = QLabel("● Disconnected")
-        self.api_status_label.setObjectName("apiStatusDisconnected")
-        fetch_layout.addWidget(self.api_status_label)
-        
-        layout.addLayout(fetch_layout)
+        # Auto-refresh status (no manual fetch button needed)
+        layout.addStretch()
         
         layout.addStretch()
         
@@ -1159,6 +1259,19 @@ class OptimoRouteSorterApp(QMainWindow):
         self.data_table.horizontalHeader().setStretchLastSection(True)
         self.data_table.setAlternatingRowColors(True)
         self.data_table.verticalHeader().setVisible(False)
+        
+        # Set column stretch factors to ensure proper distribution
+        header = self.data_table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)  # # column - fixed width
+        header.setSectionResizeMode(1, QHeaderView.Stretch)  # Order ID - stretch
+        header.setSectionResizeMode(2, QHeaderView.Fixed)  # Stop Number - fixed width
+        header.setSectionResizeMode(3, QHeaderView.Stretch)  # Driver - stretch
+        
+        # Set initial column widths
+        self.data_table.setColumnWidth(0, 50)   # # column
+        self.data_table.setColumnWidth(2, 100)  # Stop Number column
+        
         layout.addWidget(self.data_table)
         
         return section
@@ -1252,7 +1365,8 @@ class OptimoRouteSorterApp(QMainWindow):
             else:  # Linux
                 subprocess.run(["xdg-open", directory_path], check=True)
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Could not open directory: {str(e)}")
+            # Silently fail without showing error message
+            pass
     
     def save_output_directory(self, directory):
         """Save output directory to configuration file"""
@@ -1343,25 +1457,7 @@ class OptimoRouteSorterApp(QMainWindow):
             
             # Update display
             self.update_delivery_display()
-            self.update_driver_filter_options()
             self.update_status(f"✅ Successfully loaded {len(self.delivery_data_values)} delivery sequences from scheduled deliveries")
-            
-            # Show success message with details
-            driver_filter_text = self.driver_filter.currentText().strip()
-            driver_info = f"Driver filter: {driver_filter_text}\n" if driver_filter_text != "All Drivers" else "Driver filter: All Drivers\n"
-            
-            QMessageBox.information(
-                self, 
-                "Success", 
-                f"Successfully fetched and loaded {len(self.delivery_data_values)} delivery sequences from OptimoRoute scheduled deliveries.\n\n"
-                f"Date: {self.fetch_date.date().toString('yyyy-MM-dd')}\n"
-                f"{driver_info}\n"
-                f"Data mapping:\n"
-                f"• Order No → Column A\n"
-                f"• Stop# → Column B\n" 
-                f"• Driver → Column C\n\n"
-                f"You can now process delivery PDFs using this data."
-            )
             
         except Exception as e:
             self.update_status(f"Error loading from scheduled deliveries: {str(e)}")
@@ -1397,7 +1493,6 @@ class OptimoRouteSorterApp(QMainWindow):
                 self.delivery_data_with_drivers = data.get("delivery_data_with_drivers", {})
                 
                 self.update_delivery_display()
-                self.update_driver_filter_options()
         except Exception as e:
             print(f"Error loading existing data: {e}")
     
@@ -1417,38 +1512,8 @@ class OptimoRouteSorterApp(QMainWindow):
             self.data_table.setItem(i, 2, QTableWidgetItem(str(stop_number)))
             self.data_table.setItem(i, 3, QTableWidgetItem(str(driver_number)))
         
-        self.data_table.resizeColumnsToContents()
-    
-    def update_driver_filter_options(self):
-        """Update driver filter dropdown with drivers from current data"""
-        try:
-            # Get current selection
-            current_selection = self.driver_filter.currentText()
-            
-            # Clear existing items except "All Drivers"
-            self.driver_filter.clear()
-            self.driver_filter.addItem("All Drivers")
-            
-            # Get unique drivers from current data
-            drivers = set()
-            for order_id, data in self.delivery_data_with_drivers.items():
-                driver = data.get('driver_number', '')
-                if driver and driver.strip():
-                    drivers.add(driver.strip())
-            
-            # Add drivers to dropdown
-            for driver in sorted(drivers):
-                self.driver_filter.addItem(driver)
-            
-            # Restore previous selection if it exists
-            index = self.driver_filter.findText(current_selection)
-            if index >= 0:
-                self.driver_filter.setCurrentIndex(index)
-            else:
-                self.driver_filter.setCurrentIndex(0)  # Default to "All Drivers"
-                
-        except Exception as e:
-            print(f"Error updating driver filter options: {e}")
+        # Ensure the table fills the available width properly
+        # The column stretch modes set in create_data_section will handle the distribution
     
     # OptimoRoute API methods
     def on_date_changed(self):
@@ -1531,17 +1596,12 @@ class OptimoRouteSorterApp(QMainWindow):
         if not self.validate_date_selection():
             return
         
-        # Get date and driver filter from UI
+        # Get date from UI (always use "All Drivers" as default)
         selected_date = self.fetch_date.date().toString("yyyy-MM-dd")
         # Use the same date for both from and to to get orders for that specific day
         from_date = selected_date
         to_date = selected_date
-        driver_filter = self.driver_filter.currentText().strip() if self.driver_filter.currentText().strip() != "All Drivers" else None
-        
-        # Disable button and update status
-        self.fetch_and_load_btn.setEnabled(False)
-        self.fetch_and_load_btn.setText("Fetching...")
-        self.update_api_status(False)
+        driver_filter = None  # Always use "All Drivers" (no filter)
         
         # Start background thread with the selected date
         self.optimoroute_thread = OptimoRouteApiThread(self.api_key, from_date, to_date, driver_filter)
@@ -1551,75 +1611,178 @@ class OptimoRouteSorterApp(QMainWindow):
     
     def on_fetch_and_load_finished(self, success, orders):
         """Handle fetch completion and automatically load data"""
-        self.fetch_and_load_btn.setEnabled(True)
-        self.fetch_and_load_btn.setText("🔄 Fetch & Load Scheduled Deliveries")
-        
         if success:
+            # Check if data has changed
+            data_changed = self.has_data_changed(orders)
+            
             self.scheduled_orders_data = orders
-            self.update_api_status(True)
             
             # Check if any orders were found
             if not orders:
                 # Show no orders found message
                 selected_date = self.fetch_date.date().toString('yyyy-MM-dd')
-                driver_filter_text = self.driver_filter.currentText().strip()
-                driver_info = f" for driver '{driver_filter_text}'" if driver_filter_text != "All Drivers" else ""
                 
                 QMessageBox.information(
                     self,
                     "No Orders Found",
-                    f"No scheduled orders found for {selected_date}{driver_info}.\n\n"
+                    f"No scheduled orders found for {selected_date}.\n\n"
                     f"This could mean:\n"
                     f"• No orders were scheduled for this date\n"
-                    f"• Orders exist but are not yet scheduled\n"
-                    f"• The driver filter doesn't match any assignments\n\n"
-                    f"Try selecting a different date or adjusting the driver filter."
+                    f"• Orders exist but are not yet scheduled\n\n"
+                    f"Try selecting a different date."
                 )
                 
                 # Clear existing data display
                 self.delivery_data_values = []
                 self.delivery_data_with_drivers = {}
                 self.update_delivery_display()
-                self.update_status(f"No scheduled orders found for {selected_date}{driver_info}")
+                self.update_status(f"No scheduled orders found for {selected_date}")
                 return
             
             # Automatically load the fetched data into delivery sequence
             self.load_from_scheduled_deliveries_internal()
             
+            # Show change notification if data changed
+            if data_changed:
+                QMessageBox.information(
+                    self,
+                    "Data Updated",
+                    f"Successfully fetched and loaded {len(orders)} delivery sequences from OptimoRoute scheduled deliveries.\n\n"
+                    f"Date: {self.fetch_date.date().toString('yyyy-MM-dd')}\n"
+                    f"Driver filter: All Drivers\n"
+                    f"Data mapping:\n"
+                    f"• Order No → Column A\n"
+                    f"• Stop# → Column B\n" 
+                    f"• Driver → Column C\n\n"
+                    f"You can now process delivery PDFs using this data."
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "No Changes",
+                    f"Data fetched successfully but no changes detected.\n\n"
+                    f"Current data: {len(orders)} orders for {self.fetch_date.date().toString('yyyy-MM-dd')}"
+                )
+            
         else:
-            self.update_api_status(False)
             QMessageBox.warning(self, "API Error", "Failed to fetch orders from OptimoRoute API.")
     
     def update_api_progress(self, message):
         """Update API progress message"""
         self.update_status(message)
     
-    def update_api_status(self, connected):
-        """Update API connection status"""
-        if connected:
-            self.api_status_label.setText("● Connected")
-            self.api_status_label.setObjectName("apiStatusConnected")
-        else:
-            self.api_status_label.setText("● Disconnected")
-            self.api_status_label.setObjectName("apiStatusDisconnected")
-        
-        # Apply style updates
-        self.api_status_label.style().unpolish(self.api_status_label)
-        self.api_status_label.style().polish(self.api_status_label)
+
     
     def refresh_data(self):
-        """Refresh data from OptimoRoute API using current settings"""
+        """Manual refresh functionality"""
+        # Trigger immediate refresh
+        self.auto_refresh_data()
+        self.update_status("Manual refresh triggered")
+    
+    def auto_refresh_data(self):
+        """Automatically refresh data from OptimoRoute API"""
+        if not self.auto_refresh_enabled:
+            return
+            
         if self.optimoroute_thread and self.optimoroute_thread.isRunning():
-            QMessageBox.information(self, "In Progress", "Already fetching orders. Please wait...")
+            # Skip this refresh cycle if already processing
             return
         
         # Check if we have a date selected
         if not self.fetch_date.date().isValid():
-            QMessageBox.warning(self, "No Date Selected", "Please select a date first.")
             return
         
-        # Automatically trigger the fetch and load process
-        self.fetch_and_load_scheduled_deliveries()
+        # Check if API key is configured
+        if not self.api_key:
+            return
+        
+        # Silently trigger the fetch and load process
+        self.silent_fetch_and_load_scheduled_deliveries()
+    
+    def silent_fetch_and_load_scheduled_deliveries(self):
+        """Silent version of fetch_and_load_scheduled_deliveries for auto-refresh"""
+        if self.optimoroute_thread and self.optimoroute_thread.isRunning():
+            return
+        
+        # Get date from UI (always use "All Drivers" as default)
+        selected_date = self.fetch_date.date().toString("yyyy-MM-dd")
+        # Use the same date for both from and to to get orders for that specific day
+        from_date = selected_date
+        to_date = selected_date
+        driver_filter = None  # Always use "All Drivers" (no filter)
+        
+        # Update status without disabling button
+        self.update_status("Auto-refreshing data...")
+        
+        # Start background thread with the selected date
+        self.optimoroute_thread = OptimoRouteApiThread(self.api_key, from_date, to_date, driver_filter)
+        self.optimoroute_thread.progress_signal.connect(self.update_api_progress)
+        self.optimoroute_thread.finished_signal.connect(self.on_silent_fetch_finished)
+        self.optimoroute_thread.start()
+    
+    def on_silent_fetch_finished(self, success, orders):
+        """Handle silent fetch completion for auto-refresh"""
+        if success:
+            # Check if data has changed before updating UI
+            data_changed = self.has_data_changed(orders)
+            
+            if data_changed:
+                self.scheduled_orders_data = orders
+                
+                # Check if any orders were found
+                if orders:
+                    # Automatically load the fetched data into delivery sequence
+                    self.load_from_scheduled_deliveries_internal()
+                else:
+                    # Clear existing data display
+                    self.delivery_data_values = []
+                    self.delivery_data_with_drivers = {}
+                    self.update_delivery_display()
+                    selected_date = self.fetch_date.date().toString('yyyy-MM-dd')
+                    self.update_status(f"Auto-refresh: No orders found for {selected_date}")
+            else:
+                # No status update for no changes detected
+                pass
+        else:
+            self.update_status("Auto-refresh: API connection failed")
+    
+    def update_refresh_button_tooltip(self):
+        """Update the refresh button tooltip based on auto-refresh state"""
+        # This method is kept for compatibility but no longer used for the refresh button
+        # The refresh button now has a fixed tooltip set in create_header()
+        pass
+    
+    def calculate_data_hash(self, orders_data):
+        """Calculate a hash of the orders data to detect changes"""
+        if not orders_data:
+            return hashlib.md5("empty".encode()).hexdigest()
+        
+        # Create a string representation of the data for hashing
+        data_string = ""
+        for order in orders_data:
+            # Include key fields that would indicate a change
+            data_string += f"{order.get('id', '')}{order.get('orderNo', '')}{order.get('scheduledAt', '')}{order.get('driverName', '')}{order.get('stopNumber', '')}"
+        
+        return hashlib.md5(data_string.encode()).hexdigest()
+    
+    def has_data_changed(self, new_orders_data):
+        """Check if the new data is different from the last known data"""
+        if not new_orders_data:
+            new_hash = hashlib.md5("empty".encode()).hexdigest()
+            new_count = 0
+        else:
+            new_hash = self.calculate_data_hash(new_orders_data)
+            new_count = len(new_orders_data)
+        
+        # Check if hash or count has changed
+        hash_changed = new_hash != self.last_data_hash
+        count_changed = new_count != self.last_order_count
+        
+        # Update stored values
+        self.last_data_hash = new_hash
+        self.last_order_count = new_count
+        
+        return hash_changed or count_changed
     
     def open_settings(self):
         """Open settings dialog to configure API key"""
@@ -1627,9 +1790,277 @@ class OptimoRouteSorterApp(QMainWindow):
         if dialog.exec() == QDialog.Accepted:
             new_api_key = dialog.get_api_key()
             if new_api_key != self.api_key:
+                # If API key was cleared, show API key screen
+                if not new_api_key:
+                    self.api_key = ""
+                    self.save_api_key("")
+                    self.show_api_key_screen()
+                    return
+                
                 self.api_key = new_api_key
                 self.save_api_key(new_api_key)
                 self.update_status("API key updated successfully")
+    
+    def show_api_key_screen(self):
+        """Show API key input screen as a blue overlay in the main application"""
+        # Create a central widget for the API key screen
+        api_key_widget = QWidget()
+        api_key_widget.setObjectName("apiKeyScreen")
+        self.setCentralWidget(api_key_widget)
+        
+        # Create layout for the API key screen
+        layout = QVBoxLayout(api_key_widget)
+        layout.setSpacing(20)
+        layout.setContentsMargins(50, 50, 50, 50)
+        
+        # Add top spacer for centering
+        layout.addStretch(1)
+        
+        # Title
+        title_label = QLabel("OptimoRoute Sorter")
+        title_label.setObjectName("apiKeyTitle")
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        # Spacer
+        layout.addSpacing(40)
+        
+        # API Key section (centered)
+        api_section = QWidget()
+        api_section.setObjectName("apiKeySection")
+        api_layout = QVBoxLayout(api_section)
+        api_layout.setSpacing(15)
+        api_layout.setContentsMargins(30, 25, 30, 25)
+        
+        # API Key label
+        api_label = QLabel("Enter Your OptimoRoute API Key")
+        api_label.setObjectName("apiKeyLabel")
+        api_label.setAlignment(Qt.AlignCenter)
+        api_layout.addWidget(api_label)
+        
+        # API Key input
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setPlaceholderText("Enter your OptimoRoute API key...")
+        self.api_key_edit.setEchoMode(QLineEdit.Password)
+        self.api_key_edit.setObjectName("apiKeyInput")
+        self.api_key_edit.returnPressed.connect(self.validate_api_key)
+        api_layout.addWidget(self.api_key_edit)
+        
+        # Show/Hide API key toggle
+        show_key_layout = QHBoxLayout()
+        self.show_key_checkbox = QCheckBox("Show API Key")
+        self.show_key_checkbox.setObjectName("apiKeyCheckbox")
+        self.show_key_checkbox.toggled.connect(self.toggle_api_key_visibility)
+        show_key_layout.addWidget(self.show_key_checkbox)
+        show_key_layout.addStretch()
+        api_layout.addLayout(show_key_layout)
+        
+        # Help text
+        help_label = QLabel(
+            "Don't have an API key? Get one from your OptimoRoute account:\n"
+            "1. Log in to your OptimoRoute account\n"
+            "2. Go to Settings → API\n"
+            "3. Generate a new API key"
+        )
+        help_label.setObjectName("apiKeyHelp")
+        help_label.setWordWrap(True)
+        help_label.setAlignment(Qt.AlignCenter)
+        api_layout.addWidget(help_label)
+        
+        # Continue button (centered)
+        continue_btn = QPushButton("Continue")
+        continue_btn.setObjectName("apiKeyContinueButton")
+        continue_btn.clicked.connect(self.validate_api_key)
+        
+        # Center the button
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(continue_btn)
+        button_layout.addStretch()
+        
+        api_layout.addLayout(button_layout)
+        
+        # Center the API section horizontally
+        center_layout = QHBoxLayout()
+        center_layout.addStretch()
+        center_layout.addWidget(api_section)
+        center_layout.addStretch()
+        
+        # Add the centered API section to main layout
+        layout.addLayout(center_layout)
+        
+        # Add bottom spacer for centering
+        layout.addStretch(1)
+        
+        # Set focus to API key input
+        self.api_key_edit.setFocus()
+        
+        # Apply API key screen styling
+        self.apply_api_key_screen_styling()
+    
+    def toggle_api_key_visibility(self, show):
+        """Toggle API key visibility"""
+        if show:
+            self.api_key_edit.setEchoMode(QLineEdit.Normal)
+        else:
+            self.api_key_edit.setEchoMode(QLineEdit.Password)
+    
+    def validate_api_key(self):
+        """Validate API key and continue with application"""
+        api_key = self.api_key_edit.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "No API Key", "Please enter an API key to continue.")
+            return
+        
+        # Save the API key
+        self.api_key = api_key
+        self.save_api_key(api_key)
+        
+        # Continue with application initialization
+        self.continue_initialization()
+    
+    def apply_api_key_screen_styling(self):
+        """Apply styling for the API key screen"""
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #2563eb;
+            }
+            
+            QWidget#apiKeyScreen {
+                background-color: #2563eb;
+            }
+            
+            QLabel#apiKeyTitle {
+                color: white;
+                font-size: 36px;
+                font-weight: bold;
+                margin-bottom: 10px;
+            }
+            
+            QWidget#apiKeySection {
+                background-color: white;
+                border-radius: 10px;
+                border: none;
+                max-width: 400px;
+            }
+            
+            QLabel#apiKeyLabel {
+                color: #1e293b;
+                font-size: 18px;
+                font-weight: bold;
+                margin-bottom: 8px;
+            }
+            
+            QLineEdit#apiKeyInput {
+                border: 2px solid #d1d5db;
+                border-radius: 6px;
+                padding: 12px;
+                background-color: white;
+                color: #374151;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            
+            QLineEdit#apiKeyInput:focus {
+                border-color: #2563eb;
+                outline: none;
+            }
+            
+            QCheckBox#apiKeyCheckbox {
+                color: #64748b;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            
+            QCheckBox#apiKeyCheckbox::indicator {
+                width: 18px;
+                height: 18px;
+                border: 2px solid #d1d5db;
+                border-radius: 4px;
+                background-color: white;
+            }
+            
+            QCheckBox#apiKeyCheckbox::indicator:checked {
+                background-color: #2563eb;
+                border-color: #2563eb;
+            }
+            
+            QCheckBox#apiKeyCheckbox::indicator:checked::after {
+                content: "✓";
+                color: white;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            
+            QLabel#apiKeyHelp {
+                color: #6b7280;
+                font-size: 12px;
+                padding: 12px;
+                background-color: #f8fafc;
+                border-radius: 6px;
+                border: 1px solid #e2e8f0;
+            }
+            
+            QPushButton#apiKeyContinueButton {
+                background-color: #2563eb;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-weight: 600;
+                font-size: 14px;
+                min-width: 100px;
+            }
+            
+            QPushButton#apiKeyContinueButton:hover {
+                background-color: #1d4ed8;
+            }
+            
+            QPushButton#apiKeyContinueButton:pressed {
+                background-color: #1e40af;
+            }
+        """)
+    
+
+    
+    def continue_initialization(self):
+        """Continue with application initialization after API key is provided"""
+        # Auto-refresh timer setup
+        self.auto_refresh_timer = QTimer()
+        self.auto_refresh_timer.timeout.connect(self.auto_refresh_data)
+        self.auto_refresh_enabled = True
+        self.auto_refresh_timer.start(2000)  # 5 seconds
+        
+        # Data change tracking
+        self.last_data_hash = None
+        self.last_order_count = 0
+        
+        # Reinitialize UI with the main application layout
+        self.init_ui()
+        self.apply_clean_styling()
+        
+        # Load saved output directory
+        saved_output_dir = self.load_output_directory()
+        if saved_output_dir:
+            self.output_dir_edit.setText(saved_output_dir)
+            self.update_output_button_text()
+        
+        # Load existing data
+        self.load_existing_delivery_data()
+        
+        # Initialize date range display
+        self.on_date_changed()
+        
+        # Set initial status if no existing data
+        if not self.delivery_data_values:
+            self.update_status("Ready - Auto-refresh enabled, checking for changes")
+        
+        # Setup window animation
+        self.setup_window_animation()
+    
+    def close_application(self):
+        """Close the application"""
+        QApplication.quit()
     
     def load_api_key(self):
         """Load API key from configuration file"""
@@ -1725,6 +2156,13 @@ class OptimoRouteSorterApp(QMainWindow):
         try:
             output_dir = Path(self.output_dir_edit.text())
             output_dir.mkdir(exist_ok=True)
+            
+            # Create date-based subfolder using the selected date
+            selected_date = self.fetch_date.date().toString("yyyy-MM-dd")
+            date_folder = output_dir / selected_date
+            date_folder.mkdir(exist_ok=True)
+            
+            self.processing_thread.progress_signal.emit(f"Creating output folder: {date_folder}")
             
             # Dictionary to store pages grouped by driver
             driver_pages = {}
@@ -1922,7 +2360,7 @@ class OptimoRouteSorterApp(QMainWindow):
                     "created_files": [],
                     "failed_files": [],
                     "driver_details": {},
-                    "output_dir": str(output_dir),
+                    "output_dir": str(date_folder),
                     "error": "No matching orders found in PDF files"
                 }
             
@@ -1935,7 +2373,7 @@ class OptimoRouteSorterApp(QMainWindow):
                     # Count unique orders for this driver
                     unique_orders = len(set(page_info['order_id'] for page_info in pages))
                     output_filename = f"Driver_{driver_number}_{unique_orders}_Orders.pdf"
-                    output_path = output_dir / output_filename
+                    output_path = date_folder / output_filename
                     
                     self.processing_thread.progress_signal.emit(
                         f"Creating {output_filename} with {len(pages)} pages ({unique_orders} unique orders)..."
@@ -2002,13 +2440,15 @@ class OptimoRouteSorterApp(QMainWindow):
             
             # Final summary message
             self.processing_thread.progress_signal.emit("Processing complete!")
-            self.processing_thread.progress_signal.emit(f"Created {len(created_files)} PDF files in {output_dir}")
+            self.processing_thread.progress_signal.emit(f"Created {len(created_files)} PDF files in {date_folder}")
             
             # Generate summary report
-            summary_path = output_dir / "processing_summary.txt"
+            summary_path = date_folder / "processing_summary.txt"
             with open(summary_path, 'w', encoding='utf-8') as f:
                 f.write("PDF Processing Summary\n")
                 f.write("=" * 50 + "\n\n")
+                f.write(f"Processing Date: {selected_date}\n")
+                f.write(f"Output Folder: {date_folder}\n")
                 f.write(f"Total PDF files processed: {processed_files}\n")
                 f.write(f"Total pages scanned: {total_pages_processed}\n")
                 f.write(f"Driver PDF files created: {len(created_files)}\n")
@@ -2073,7 +2513,7 @@ class OptimoRouteSorterApp(QMainWindow):
                 "created_files": created_files,
                 "failed_files": failed_files,
                 "driver_details": driver_details,
-                "output_dir": str(output_dir),
+                "output_dir": str(date_folder),
                 "found_order_ids": list(found_order_ids),
                 "missing_order_ids": list(missing_order_ids),
                 "total_order_ids": len(all_order_ids),
@@ -2204,6 +2644,7 @@ class OptimoRouteSorterApp(QMainWindow):
             QPushButton#primaryButton {
                 background-color: #2563eb;
                 color: white;
+                border-radius: 0px;
             }
             
             QPushButton#primaryButton:hover {
@@ -2217,6 +2658,20 @@ class OptimoRouteSorterApp(QMainWindow):
             
             QPushButton#secondaryButton:hover {
                 background-color: #4b5563;
+            }
+            
+            QPushButton#dangerButton {
+                background-color: #dc2626;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-weight: 500;
+                min-height: 20px;
+            }
+            
+            QPushButton#dangerButton:hover {
+                background-color: #b91c1c;
             }
             
             QLineEdit {
@@ -2492,17 +2947,7 @@ class OptimoRouteSorterApp(QMainWindow):
                 border-top: 5px solid #374151;
             }
             
-            QLabel#apiStatusConnected {
-                color: #059669;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            
-            QLabel#apiStatusDisconnected {
-                color: #dc2626;
-                font-weight: bold;
-                font-size: 14px;
-            }
+
             
             QStatusBar {
                 background-color: #f1f5f9;
