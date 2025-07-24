@@ -167,22 +167,6 @@ class ProcessingResultsDialog(QDialog):
         
         layout.addWidget(tab_widget)
         
-        # Output directory info
-        output_frame = QFrame()
-        output_frame.setObjectName("outputFrame")
-        output_layout = QVBoxLayout(output_frame)
-        
-        output_label = QLabel("Output Directory:")
-        output_label.setObjectName("outputLabel")
-        output_layout.addWidget(output_label)
-        
-        output_path = QLabel(results.get('output_dir', ''))
-        output_path.setObjectName("outputPath")
-        output_path.setWordWrap(True)
-        output_layout.addWidget(output_path)
-        
-        layout.addWidget(output_frame)
-        
         # Buttons
         button_layout = QHBoxLayout()
         
@@ -271,11 +255,6 @@ class ProcessingResultsDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        # Summary info
-        summary_label = QLabel(f"Missing Orders: {len(missing_order_ids)} order IDs not found in PDF files")
-        summary_label.setObjectName("missingSummary")
-        layout.addWidget(summary_label)
-        
         # Table
         table = QTableWidget()
         table.setColumnCount(4)
@@ -309,15 +288,6 @@ class ProcessingResultsDialog(QDialog):
         table.resizeColumnsToContents()
         table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(table)
-        
-        # Export button
-        export_layout = QHBoxLayout()
-        export_btn = QPushButton("Export Missing Orders List")
-        export_btn.setObjectName("secondaryButton")
-        export_btn.clicked.connect(lambda: self.export_missing_orders(missing_order_ids, delivery_data_with_drivers))
-        export_layout.addWidget(export_btn)
-        export_layout.addStretch()
-        layout.addLayout(export_layout)
         
         return widget
     
@@ -479,25 +449,7 @@ class ProcessingResultsDialog(QDialog):
                 font-weight: bold;
             }
             
-            QFrame#outputFrame {
-                background-color: white;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                padding: 15px;
-            }
-            
-            QLabel#outputLabel {
-                font-weight: 600;
-                color: #374151;
-                font-size: 14px;
-                margin-bottom: 5px;
-            }
-            
-            QLabel#outputPath {
-                color: #6b7280;
-                font-size: 12px;
-                font-family: 'Consolas', monospace;
-            }
+
             
             QTabWidget::pane {
                 border: 1px solid #e2e8f0;
@@ -552,16 +504,7 @@ class ProcessingResultsDialog(QDialog):
                 color: #374151;
             }
             
-            QLabel#missingSummary {
-                font-size: 16px;
-                font-weight: bold;
-                color: #dc2626;
-                padding: 10px;
-                background-color: #fef2f2;
-                border: 1px solid #fecaca;
-                border-radius: 6px;
-                margin-bottom: 10px;
-            }
+
         """)
 
 
