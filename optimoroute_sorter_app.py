@@ -871,6 +871,12 @@ class OptimoRouteSorterApp(QMainWindow):
         self.init_ui()
         self.apply_clean_styling()
         
+        # Load saved output directory
+        saved_output_dir = self.load_output_directory()
+        if saved_output_dir:
+            self.output_dir_edit.setText(saved_output_dir)
+            self.update_output_button_text()
+        
         # Load existing data
         self.load_existing_delivery_data()
         
@@ -999,11 +1005,12 @@ class OptimoRouteSorterApp(QMainWindow):
         layout.addWidget(QLabel("Output Directory:"))
         self.output_dir_edit = QLineEdit()
         self.output_dir_edit.setPlaceholderText("Select output directory...")
+        self.output_dir_edit.textChanged.connect(self.update_output_button_text)
         layout.addWidget(self.output_dir_edit)
         
-        output_btn = QPushButton("Browse")
-        output_btn.clicked.connect(self.browse_output_directory)
-        layout.addWidget(output_btn)
+        self.output_btn = QPushButton("Browse")
+        self.output_btn.clicked.connect(self.browse_output_directory)
+        layout.addWidget(self.output_btn)
         
         # Spacer
         layout.addSpacing(15)
@@ -1135,6 +1142,8 @@ class OptimoRouteSorterApp(QMainWindow):
         )
         if directory:
             self.output_dir_edit.setText(directory)
+            self.save_output_directory(directory)
+            self.update_output_button_text()
     
     def browse_pdf_files(self):
         """Browse for PDF files to process"""
@@ -1169,6 +1178,47 @@ class OptimoRouteSorterApp(QMainWindow):
                 subprocess.run(["xdg-open", directory_path], check=True)
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not open directory: {str(e)}")
+    
+    def save_output_directory(self, directory):
+        """Save output directory to configuration file"""
+        try:
+            config_file = "api_config.json"
+            config = {}
+            
+            # Load existing config if it exists
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            
+            # Update with new output directory
+            config['output_directory'] = directory
+            
+            # Save back to file
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            print(f"Error saving output directory: {e}")
+    
+    def load_output_directory(self):
+        """Load output directory from configuration file"""
+        try:
+            config_file = "api_config.json"
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return config.get('output_directory', '')
+            return ''
+        except Exception as e:
+            print(f"Error loading output directory: {e}")
+            return ''
+    
+    def update_output_button_text(self):
+        """Update the output directory button text based on whether a directory is set"""
+        if self.output_dir_edit.text().strip():
+            self.output_btn.setText("Change Output Location")
+        else:
+            self.output_btn.setText("Browse")
     
     # Data handling methods
     def load_from_scheduled_deliveries_internal(self):
@@ -1523,7 +1573,17 @@ class OptimoRouteSorterApp(QMainWindow):
         """Save API key to configuration file"""
         config_file = "api_config.json"
         try:
-            config = {'api_key': api_key}
+            config = {}
+            
+            # Load existing config if it exists
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            
+            # Update with new API key
+            config['api_key'] = api_key
+            
+            # Save back to file
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
         except Exception as e:
