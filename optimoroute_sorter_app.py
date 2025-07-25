@@ -2367,22 +2367,36 @@ class OptimoRouteSorterApp(QMainWindow):
             for driver_number, pages in driver_pages.items():
                 if not pages:
                     continue
-                
+
                 try:
                     # Create new PDF for this driver
                     # Count unique orders for this driver
                     unique_orders = len(set(page_info['order_id'] for page_info in pages))
                     output_filename = f"Driver_{driver_number}_{unique_orders}_Orders.pdf"
                     output_path = date_folder / output_filename
-                    
+
                     self.processing_thread.progress_signal.emit(
                         f"Creating {output_filename} with {len(pages)} pages ({unique_orders} unique orders)..."
                     )
+
+                    # Sort pages by stop number first (delivery sequence order)
+                    try:
+                        pages.sort(key=lambda x: int(x.get('stop_number', 0)))
+                    except (ValueError, TypeError):
+                        # If stop numbers aren't numeric, sort as strings
+                        pages.sort(key=lambda x: str(x.get('stop_number', '')))
                     
+                    # Reverse pages so they print in correct order (last page prints first)
+                    pages.reverse()
+                    
+                    self.processing_thread.progress_signal.emit(
+                        f"Pages sorted by delivery sequence and reversed for correct printing order"
+                    )
+
                     new_pdf = fitz.open()
                     pages_added = 0
-                    
-                    # Add all pages for this driver
+
+                    # Add all pages for this driver in reversed delivery sequence order
                     # Group pages by source file to minimize file opening
                     pages_by_file = {}
                     for page_info in pages:
@@ -2438,9 +2452,106 @@ class OptimoRouteSorterApp(QMainWindow):
                     )
                     continue
             
+            # Create Reversed Picking folder with opposite order
+            self.processing_thread.progress_signal.emit("Creating Reversed Picking folder...")
+            
+            reversed_picking_folder = date_folder / "Reversed Picking Orders"
+            reversed_picking_folder.mkdir(exist_ok=True)
+            
+            reversed_created_files = []
+            reversed_failed_files = []
+            
+            for driver_number, pages in driver_pages.items():
+                if not pages:
+                    continue
+
+                try:
+                    # Create new PDF for this driver in reversed picking order
+                    unique_orders = len(set(page_info['order_id'] for page_info in pages))
+                    output_filename = f"Driver_{driver_number}_{unique_orders}_Orders.pdf"
+                    reversed_output_path = reversed_picking_folder / output_filename
+
+                    self.processing_thread.progress_signal.emit(
+                        f"Creating reversed picking {output_filename} with {len(pages)} pages ({unique_orders} unique orders)..."
+                    )
+
+                    # Sort pages by stop number (delivery sequence order) - NO REVERSE
+                    # This means first deliveries will be picked last
+                    reversed_pages = pages.copy()  # Make a copy to avoid modifying original
+                    try:
+                        reversed_pages.sort(key=lambda x: int(x.get('stop_number', 0)))
+                    except (ValueError, TypeError):
+                        # If stop numbers aren't numeric, sort as strings
+                        reversed_pages.sort(key=lambda x: str(x.get('stop_number', '')))
+                    
+                    # DO NOT reverse - keep delivery sequence order for reversed picking
+                    self.processing_thread.progress_signal.emit(
+                        f"Pages sorted by delivery sequence for reversed picking (first deliveries picked last)"
+                    )
+
+                    new_pdf = fitz.open()
+                    pages_added = 0
+
+                    # Add all pages for this driver in delivery sequence order (first delivery picked last)
+                    # Group pages by source file to minimize file opening
+                    pages_by_file = {}
+                    for page_info in reversed_pages:
+                        source_file = page_info['source_pdf_path']
+                        if source_file not in pages_by_file:
+                            pages_by_file[source_file] = []
+                        pages_by_file[source_file].append(page_info['page_num'])
+                    
+                    # Process each source file
+                    for source_file, page_numbers in pages_by_file.items():
+                        try:
+                            source_pdf = fitz.open(source_file)
+                            for page_num in page_numbers:
+                                # Insert page into new PDF
+                                new_pdf.insert_pdf(source_pdf, from_page=page_num, to_page=page_num)
+                                pages_added += 1
+                            source_pdf.close()
+                        except Exception as e:
+                            self.processing_thread.progress_signal.emit(
+                                f"Error adding pages from {source_file} to reversed picking PDF: {str(e)}"
+                            )
+                            continue
+                    
+                    # Only save if we successfully added pages
+                    if pages_added > 0:
+                        new_pdf.save(str(reversed_output_path))
+                        new_pdf.close()
+                        
+                        # Verify the file was created
+                        if reversed_output_path.exists():
+                            reversed_created_files.append(output_filename)
+                            self.processing_thread.progress_signal.emit(
+                                f"✓ Successfully created reversed picking {output_filename} with {pages_added} pages"
+                            )
+                        else:
+                            reversed_failed_files.append(output_filename)
+                            self.processing_thread.progress_signal.emit(
+                                f"✗ Failed to create reversed picking {output_filename} - file not found after save"
+                            )
+                    else:
+                        new_pdf.close()
+                        reversed_failed_files.append(output_filename)
+                        self.processing_thread.progress_signal.emit(
+                            f"✗ No pages added to reversed picking {output_filename}"
+                        )
+                        
+                except Exception as e:
+                    # Count unique orders for error message
+                    unique_orders = len(set(page_info['order_id'] for page_info in pages))
+                    reversed_failed_files.append(f"Driver_{driver_number}_{unique_orders}_Orders.pdf")
+                    self.processing_thread.progress_signal.emit(
+                        f"✗ Error creating reversed picking PDF for Driver {driver_number}: {str(e)}"
+                    )
+                    continue
+            
             # Final summary message
             self.processing_thread.progress_signal.emit("Processing complete!")
             self.processing_thread.progress_signal.emit(f"Created {len(created_files)} PDF files in {date_folder}")
+            self.processing_thread.progress_signal.emit(f"Created {len(reversed_created_files)} reversed picking PDF files in {reversed_picking_folder}")
             
             # Generate summary report
             summary_path = date_folder / "processing_summary.txt"
@@ -2452,8 +2563,11 @@ class OptimoRouteSorterApp(QMainWindow):
                 f.write(f"Total PDF files processed: {processed_files}\n")
                 f.write(f"Total pages scanned: {total_pages_processed}\n")
                 f.write(f"Driver PDF files created: {len(created_files)}\n")
+                f.write(f"Reversed picking PDF files created: {len(reversed_created_files)}\n")
                 if failed_files:
                     f.write(f"Failed PDF files: {len(failed_files)}\n")
+                if reversed_failed_files:
+                    f.write(f"Failed reversed picking PDF files: {len(reversed_failed_files)}\n")
                 f.write("\n")
                 
                 # Order matching summary
@@ -2469,9 +2583,21 @@ class OptimoRouteSorterApp(QMainWindow):
                         f.write(f"  - {filename}\n")
                     f.write("\n")
                 
+                if reversed_created_files:
+                    f.write("✓ Successfully Created Reversed Picking PDF Files:\n")
+                    for filename in reversed_created_files:
+                        f.write(f"  - {filename}\n")
+                    f.write("\n")
+                
                 if failed_files:
                     f.write("✗ Failed PDF Files:\n")
                     for filename in failed_files:
+                        f.write(f"  - {filename}\n")
+                    f.write("\n")
+                
+                if reversed_failed_files:
+                    f.write("✗ Failed Reversed Picking PDF Files:\n")
+                    for filename in reversed_failed_files:
                         f.write(f"  - {filename}\n")
                     f.write("\n")
                 

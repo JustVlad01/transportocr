@@ -1462,9 +1462,89 @@ class OptimoRouteSorterApp(QMainWindow):
                     )
                     continue
             
+            # Create Reversed Picking folder with the same files for alternative picking order
+            self.processing_thread.progress_signal.emit("Creating Reversed Picking folder...")
+            
+            reversed_picking_folder = output_dir / "Reversed Picking"
+            reversed_picking_folder.mkdir(exist_ok=True)
+            
+            reversed_created_files = []
+            reversed_failed_files = []
+            
+            for driver_number, pages in driver_pages.items():
+                if not pages:
+                    continue
+
+                try:
+                    # Create new PDF for this driver in reversed picking order
+                    output_filename = f"Driver_{driver_number}_Orders.pdf"
+                    reversed_output_path = reversed_picking_folder / output_filename
+
+                    self.processing_thread.progress_signal.emit(
+                        f"Creating reversed picking {output_filename} with {len(pages)} pages for alternative picking order..."
+                    )
+
+                    new_pdf = fitz.open()
+                    pages_added = 0
+
+                    # Add all pages for this driver in same order (no sorting changes for simple version)
+                    # Group pages by source file to minimize file opening
+                    pages_by_file = {}
+                    for page_info in pages:
+                        source_file = page_info['source_pdf_path']
+                        if source_file not in pages_by_file:
+                            pages_by_file[source_file] = []
+                        pages_by_file[source_file].append(page_info['page_num'])
+                    
+                    # Process each source file
+                    for source_file, page_numbers in pages_by_file.items():
+                        try:
+                            source_pdf = fitz.open(source_file)
+                            for page_num in page_numbers:
+                                # Insert page into new PDF
+                                new_pdf.insert_pdf(source_pdf, from_page=page_num, to_page=page_num)
+                                pages_added += 1
+                            source_pdf.close()
+                        except Exception as e:
+                            self.processing_thread.progress_signal.emit(
+                                f"Error adding pages from {source_file} to reversed picking PDF: {str(e)}"
+                            )
+                            continue
+                    
+                    # Only save if we successfully added pages
+                    if pages_added > 0:
+                        new_pdf.save(str(reversed_output_path))
+                        new_pdf.close()
+                        
+                        # Verify the file was created
+                        if reversed_output_path.exists():
+                            reversed_created_files.append(output_filename)
+                            self.processing_thread.progress_signal.emit(
+                                f"✓ Successfully created reversed picking {output_filename} with {pages_added} pages"
+                            )
+                        else:
+                            reversed_failed_files.append(output_filename)
+                            self.processing_thread.progress_signal.emit(
+                                f"✗ Failed to create reversed picking {output_filename} - file not found after save"
+                            )
+                    else:
+                        new_pdf.close()
+                        reversed_failed_files.append(output_filename)
+                        self.processing_thread.progress_signal.emit(
+                            f"✗ No pages added to reversed picking {output_filename}"
+                        )
+                        
+                except Exception as e:
+                    reversed_failed_files.append(f"Driver_{driver_number}_Orders.pdf")
+                    self.processing_thread.progress_signal.emit(
+                        f"✗ Error creating reversed picking PDF for Driver {driver_number}: {str(e)}"
+                    )
+                    continue
+            
             # Final summary message
             self.processing_thread.progress_signal.emit("Processing complete!")
             self.processing_thread.progress_signal.emit(f"Created {len(created_files)} PDF files in {output_dir}")
+            self.processing_thread.progress_signal.emit(f"Created {len(reversed_created_files)} reversed picking PDF files in {reversed_picking_folder}")
             
             # Generate summary report
             summary_path = output_dir / "processing_summary.txt"
@@ -1474,8 +1554,11 @@ class OptimoRouteSorterApp(QMainWindow):
                 f.write(f"Total PDF files processed: {processed_files}\n")
                 f.write(f"Total pages scanned: {total_pages_processed}\n")
                 f.write(f"Driver PDF files created: {len(created_files)}\n")
+                f.write(f"Reversed picking PDF files created: {len(reversed_created_files)}\n")
                 if failed_files:
                     f.write(f"Failed PDF files: {len(failed_files)}\n")
+                if reversed_failed_files:
+                    f.write(f"Failed reversed picking PDF files: {len(reversed_failed_files)}\n")
                 f.write("\n")
                 
                 if created_files:
@@ -1484,9 +1567,21 @@ class OptimoRouteSorterApp(QMainWindow):
                         f.write(f"  - {filename}\n")
                     f.write("\n")
                 
+                if reversed_created_files:
+                    f.write("✓ Successfully Created Reversed Picking PDF Files:\n")
+                    for filename in reversed_created_files:
+                        f.write(f"  - {filename}\n")
+                    f.write("\n")
+                
                 if failed_files:
                     f.write("✗ Failed PDF Files:\n")
                     for filename in failed_files:
+                        f.write(f"  - {filename}\n")
+                    f.write("\n")
+                
+                if reversed_failed_files:
+                    f.write("✗ Failed Reversed Picking PDF Files:\n")
+                    for filename in reversed_failed_files:
                         f.write(f"  - {filename}\n")
                     f.write("\n")
                 
