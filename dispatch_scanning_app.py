@@ -133,7 +133,16 @@ class ProcessingResultsDialog(QDialog):
             files_tab = self.create_files_tab(results.get('created_files', []))
             tab_widget.addTab(files_tab, "Created Files")
         
-        # Tab 2: Driver Details
+        # Tab 2: Newly Added Rows (if any)
+        if results.get('additional_new_rows_count', 0) > 0:
+            added_tab = self.create_added_rows_tab(
+                results.get('additional_file', ''),
+                results.get('additional_new_rows_count', 0),
+                results.get('additional_new_rows', [])
+            )
+            tab_widget.addTab(added_tab, "New Rows (Additional)")
+
+        # Next: Driver Details
         if results.get('driver_details'):
             driver_tab = self.create_driver_tab(results.get('driver_details', {}))
             tab_widget.addTab(driver_tab, "Driver Details")
@@ -214,6 +223,48 @@ class ProcessingResultsDialog(QDialog):
         table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(table)
         
+        return widget
+
+    def create_added_rows_tab(self, additional_filename: str, count: int, rows: list):
+        """Create a tab showing newly added rows from the additional Excel file"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        header = QLabel(
+            f"Additional file: {additional_filename} — {count} new row(s) detected and uploaded"
+        )
+        header.setObjectName("infoText")
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        if not rows:
+            empty = QLabel("No new rows")
+            layout.addWidget(empty)
+            return widget
+
+        # Build a table from the row dicts using union of keys
+        columns = []
+        for r in rows:
+            for k in r.keys():
+                if k not in columns:
+                    columns.append(k)
+
+        table = QTableWidget()
+        table.setColumnCount(len(columns))
+        table.setHorizontalHeaderLabels([str(c) for c in columns])
+        table.setRowCount(len(rows))
+
+        for i, r in enumerate(rows):
+            for j, col in enumerate(columns):
+                val = r.get(col, "")
+                item = QTableWidgetItem("") if val is None else QTableWidgetItem(str(val))
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                table.setItem(i, j, item)
+
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table)
+
         return widget
     
     def create_driver_tab(self, driver_details):
@@ -457,6 +508,10 @@ class DispatchScanningApp(QMainWindow):
         self.selected_excel_file = ""  # NEW: Excel file with order numbers in column A
         self.selected_output_folder = ""  # NEW: Selected output folder
         self.excel_order_numbers = []  # NEW: Order numbers from Excel column A
+        # Additional Excel import for late orders
+        self.selected_additional_excel_file = ""
+        self.additional_new_rows_data = []
+        self.additional_new_rows_count = 0
         self.order_barcodes = {}
         self.processing_thread = None
         
@@ -595,6 +650,42 @@ class DispatchScanningApp(QMainWindow):
         self.excel_file_label.setObjectName("infoText")
         self.excel_file_label.setWordWrap(True)
         layout.addWidget(self.excel_file_label)
+
+        # Delivery date picker (for created_at override)
+        date_label = QLabel("Delivery Date (sets created_at for uploaded orders):")
+        date_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        layout.addWidget(date_label)
+
+        date_row = QHBoxLayout()
+        self.delivery_date_edit = QDateEdit()
+        self.delivery_date_edit.setCalendarPopup(True)
+        self.delivery_date_edit.setDate(QDate.currentDate())
+        self.delivery_date_edit.setDisplayFormat("yyyy-MM-dd")
+        date_row.addWidget(self.delivery_date_edit)
+        layout.addLayout(date_row)
+
+        # Additional Excel import subsection
+        add_excel_label = QLabel("Additional Order Excel Import (compare to initial)")
+        add_excel_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        layout.addWidget(add_excel_label)
+
+        add_excel_btn_layout = QHBoxLayout()
+        self.browse_additional_excel_btn = QPushButton("Select Additional Excel File")
+        self.browse_additional_excel_btn.clicked.connect(self.browse_additional_excel_file)
+
+        self.clear_additional_excel_btn = QPushButton("Clear")
+        self.clear_additional_excel_btn.setObjectName("secondaryButton")
+        self.clear_additional_excel_btn.clicked.connect(self.clear_additional_excel_file)
+
+        add_excel_btn_layout.addWidget(self.browse_additional_excel_btn)
+        add_excel_btn_layout.addWidget(self.clear_additional_excel_btn)
+        layout.addLayout(add_excel_btn_layout)
+
+        # Additional Excel file display
+        self.additional_excel_file_label = QLabel("No additional Excel file selected")
+        self.additional_excel_file_label.setObjectName("infoText")
+        self.additional_excel_file_label.setWordWrap(True)
+        layout.addWidget(self.additional_excel_file_label)
         
         # PDF files subsection
         pdf_label = QLabel("Picking Docket PDF Files:")
@@ -708,6 +799,14 @@ class DispatchScanningApp(QMainWindow):
         self.excel_file_label.setText("No Excel file selected")
         self.excel_file_label.setObjectName("infoText")
         self.update_status("Excel file cleared")
+
+        # Clearing base file invalidates any computed additional diffs
+        self.selected_additional_excel_file = ""
+        self.additional_new_rows_data = []
+        self.additional_new_rows_count = 0
+        if hasattr(self, 'additional_excel_file_label'):
+            self.additional_excel_file_label.setText("No additional Excel file selected")
+            self.additional_excel_file_label.setObjectName("infoText")
     
     # NEW: Output folder handling methods
     def browse_output_folder(self):
@@ -729,6 +828,108 @@ class DispatchScanningApp(QMainWindow):
         self.output_folder_label.setText("No output folder selected (will use default: picking_dockets_output)\nFiles will be saved in a date-based subfolder (YYYY-MM-DD)")
         self.output_folder_label.setObjectName("infoText")
         self.update_status("Output folder cleared - will use default location")
+
+    # Additional Excel handling methods
+    def browse_additional_excel_file(self):
+        """Browse for an additional Excel file and compute new rows vs initial Excel"""
+        if not self.selected_excel_file:
+            QMessageBox.warning(
+                self,
+                "Select Initial Excel First",
+                "Please select the initial 'Store Order Excel File' first, then choose the additional Excel file to compare."
+            )
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Additional Store Order Excel File (late orders)",
+            str(Path.home()),
+            "Excel files (*.xlsx *.xls);;All files (*.*)"
+        )
+        if not file_path:
+            return
+
+        self.selected_additional_excel_file = file_path
+        try:
+            # Compute new rows
+            new_rows = self.compute_new_rows_between_excels(self.selected_excel_file, self.selected_additional_excel_file)
+            self.additional_new_rows_data = new_rows
+            self.additional_new_rows_count = len(new_rows)
+
+            filename = Path(file_path).name
+            if self.additional_new_rows_count > 0:
+                self.additional_excel_file_label.setText(
+                    f"Selected: {filename} — {self.additional_new_rows_count} new rows will be uploaded"
+                )
+                self.additional_excel_file_label.setObjectName("successText")
+                self.update_status(f"Computed {self.additional_new_rows_count} new rows from additional Excel file")
+            else:
+                self.additional_excel_file_label.setText(
+                    f"Selected: {filename} — 0 new rows (no differences found)"
+                )
+                self.additional_excel_file_label.setObjectName("warningText")
+                self.update_status("No new rows found in additional Excel file")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Additional Excel Error", f"Error comparing Excel files: {str(e)}")
+            self.selected_additional_excel_file = ""
+            self.additional_new_rows_data = []
+            self.additional_new_rows_count = 0
+            self.additional_excel_file_label.setText("Error reading additional Excel file")
+            self.additional_excel_file_label.setObjectName("warningText")
+
+    def clear_additional_excel_file(self):
+        """Clear selected additional Excel file and any computed diffs"""
+        self.selected_additional_excel_file = ""
+        self.additional_new_rows_data = []
+        self.additional_new_rows_count = 0
+        self.additional_excel_file_label.setText("No additional Excel file selected")
+        self.additional_excel_file_label.setObjectName("infoText")
+        self.update_status("Additional Excel file cleared")
+
+    def compute_new_rows_between_excels(self, base_excel_path: str, additional_excel_path: str):
+        """Return list of dict rows that exist in additional Excel but not in base Excel.
+
+        Comparison is done on normalized full-row content across intersecting columns.
+        Preserves the order of the additional Excel file.
+        """
+        # Read both files
+        base_df = pd.read_excel(base_excel_path)
+        add_df = pd.read_excel(additional_excel_path)
+
+        if base_df.empty:
+            # If base is empty, everything is new
+            return add_df.to_dict('records')
+
+        # Align columns: use intersection to avoid mismatches
+        common_cols = [c for c in add_df.columns if c in set(base_df.columns)]
+        if not common_cols:
+            # If no common columns, treat all as new to avoid silent drops
+            return add_df.to_dict('records')
+
+        def normalize_value(v):
+            if pd.isna(v):
+                return ""
+            # Keep string form for stable comparison
+            return str(v).strip().lower()
+
+        def row_signature(series_like):
+            # Signature built from common columns only, sorted by column name for determinism
+            items = []
+            for col in sorted(common_cols):
+                items.append((col.lower(), normalize_value(series_like[col] if col in series_like else None)))
+            return tuple(items)
+
+        base_signatures = set()
+        for _, row in base_df.iterrows():
+            base_signatures.add(row_signature(row))
+
+        new_rows = []
+        for _, row in add_df.iterrows():
+            if row_signature(row) not in base_signatures:
+                new_rows.append({k: row[k] for k in add_df.columns})
+
+        return new_rows
     
 
     
@@ -845,29 +1046,67 @@ class DispatchScanningApp(QMainWindow):
         import tempfile
         
         try:
-            # STEP 1: Upload Excel file to Supabase database first
+            # STEP 1: Upload to Supabase
             if SUPABASE_AVAILABLE:
-                self.processing_thread.progress_signal.emit("📤 Uploading store order Excel file to database...")
-                
-                try:
-                    # Read Excel file maintaining row order
-                    self.processing_thread.progress_signal.emit(f"Reading {Path(self.selected_excel_file).name} and preserving Excel row order...")
-                    df = pd.read_excel(self.selected_excel_file)
-                    
-                    # Convert DataFrame to list of dictionaries (preserves row order)
-                    store_order_data = df.to_dict('records')
-                    
-                    self.processing_thread.progress_signal.emit(f"Uploading {len(store_order_data)} rows to dispatch_orders table in picking sequence order...")
-                    
-                    # Upload to Supabase using the function (order-preserving)
-                    success = upload_store_orders_from_excel(store_order_data, Path(self.selected_excel_file).name)
-                    
-                    if success:
-                        self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {Path(self.selected_excel_file).name} to database with Excel order preserved!")
-                    else:
-                        self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload {Path(self.selected_excel_file).name} to database - continuing with picking docket processing")
-                except Exception as e:
-                    self.processing_thread.progress_signal.emit(f"⚠️ Error uploading Excel file to database: {str(e)} - continuing with picking docket processing")
+                # If user selected an additional file, ONLY upload new rows from it
+                if getattr(self, 'selected_additional_excel_file', ""):
+                    try:
+                        add_name = Path(self.selected_additional_excel_file).name
+                        # Ensure we have computed diffs; if not, compute now
+                        if not getattr(self, 'additional_new_rows_data', None):
+                            new_rows_now = self.compute_new_rows_between_excels(self.selected_excel_file, self.selected_additional_excel_file)
+                            self.additional_new_rows_data = new_rows_now
+                            self.additional_new_rows_count = len(new_rows_now)
+
+                        count = len(self.additional_new_rows_data or [])
+                        if count > 0:
+                            # Build created_at from date picker (use start of day in ISO format)
+                            date_q = self.delivery_date_edit.date()
+                            created_at_iso = f"{date_q.toString('yyyy-MM-dd')}T00:00:00+00:00"
+                            self.processing_thread.progress_signal.emit(
+                                f"📤 Uploading {count} NEW rows from additional file {add_name} to database..."
+                            )
+                            add_success = upload_store_orders_from_excel(self.additional_new_rows_data, add_name, created_at_override=created_at_iso)
+                            if add_success:
+                                self.processing_thread.progress_signal.emit(
+                                    f"✅ Successfully uploaded {count} new rows from {add_name}"
+                                )
+                            else:
+                                self.processing_thread.progress_signal.emit(
+                                    f"⚠️ Failed to upload new rows from {add_name}"
+                                )
+                        else:
+                            self.processing_thread.progress_signal.emit(
+                                f"ℹ️ No new rows detected in additional file {add_name} — nothing to upload"
+                            )
+                    except Exception as e:
+                        self.processing_thread.progress_signal.emit(
+                            f"⚠️ Error uploading additional Excel new rows: {str(e)}"
+                        )
+                else:
+                    # No additional file selected — upload the full initial Excel file
+                    self.processing_thread.progress_signal.emit("📤 Uploading store order Excel file to database...")
+                    try:
+                        # Read Excel file maintaining row order
+                        self.processing_thread.progress_signal.emit(f"Reading {Path(self.selected_excel_file).name} and preserving Excel row order...")
+                        df = pd.read_excel(self.selected_excel_file)
+                        
+                        # Convert DataFrame to list of dictionaries (preserves row order)
+                        store_order_data = df.to_dict('records')
+                        
+                        self.processing_thread.progress_signal.emit(f"Uploading {len(store_order_data)} rows to dispatch_orders table in picking sequence order...")
+                        
+                        # Upload to Supabase using the function (order-preserving)
+                        date_q = self.delivery_date_edit.date()
+                        created_at_iso = f"{date_q.toString('yyyy-MM-dd')}T00:00:00+00:00"
+                        success = upload_store_orders_from_excel(store_order_data, Path(self.selected_excel_file).name, created_at_override=created_at_iso)
+                        
+                        if success:
+                            self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {Path(self.selected_excel_file).name} to database with Excel order preserved!")
+                        else:
+                            self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload {Path(self.selected_excel_file).name} to database - continuing with picking docket processing")
+                    except Exception as e:
+                        self.processing_thread.progress_signal.emit(f"⚠️ Error uploading Excel file to database: {str(e)} - continuing with picking docket processing")
             else:
                 self.processing_thread.progress_signal.emit("⚠️ Supabase not available - skipping database upload")
             
@@ -1252,7 +1491,10 @@ class DispatchScanningApp(QMainWindow):
                 "output_dir": str(output_dir),
                 "barcodes_generated": len(order_barcodes),
                 "database_upload": SUPABASE_AVAILABLE,
-                "excel_file": Path(self.selected_excel_file).name if self.selected_excel_file else "None"
+                "excel_file": Path(self.selected_excel_file).name if self.selected_excel_file else "None",
+                "additional_file": Path(self.selected_additional_excel_file).name if getattr(self, 'selected_additional_excel_file', "") else "",
+                "additional_new_rows_count": getattr(self, 'additional_new_rows_count', 0),
+                "additional_new_rows": getattr(self, 'additional_new_rows_data', [])
             }
             
         except Exception as e:

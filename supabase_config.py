@@ -232,7 +232,7 @@ def get_barcode_scan_history(order_id: str) -> List[Dict]:
         print(f"❌ Error getting scan history: {e}")
         return []
 
-def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str) -> bool:
+def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str, created_at_override: Optional[str] = None) -> bool:
     """
     Upload store orders from Excel file to dispatch_orders table
     *** ORDER PRESERVATION: Records are uploaded in EXACT Excel file order ***
@@ -254,79 +254,79 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str)
     """
     try:
         records = []
-        
+
+        def normalize_key(key: str) -> str:
+            # Lowercase and keep only alphanumeric characters
+            return ''.join(ch.lower() for ch in str(key) if ch.isalnum())
+
+        def get_value(item_row: Dict, candidate_keys: List[str], default: str = '') -> str:
+            # Build a normalized lookup map once per row
+            norm_map = {normalize_key(k): k for k in item_row.keys()}
+            for cand in candidate_keys:
+                norm = normalize_key(cand)
+                if norm in norm_map:
+                    return item_row.get(norm_map[norm], default)
+            return default
+
+        def truncate(value: str, max_len: int) -> str:
+            if value is None:
+                return value
+            s = str(value)
+            return s if len(s) <= max_len else s[:max_len]
+
         # Process records in exact Excel order (enumerate gives us the sequence)
         for excel_row_index, item in enumerate(excel_data):
-            # Handle the specific column mapping for dispatch_orders table
-            # Column A: ordernumber
-            ordernumber_raw = (item.get('ordernumber') or 
-                              item.get('order number') or 
-                              item.get('Order Number') or 
-                              item.get('order_number') or 
-                              item.get(list(item.keys())[0] if item.keys() else None) or '')
+            # Column A: ordernumber (support variants like 'OrderNumber', 'Order Number', 'order_number')
+            ordernumber_raw = get_value(item, ['ordernumber', 'OrderNumber', 'Order Number', 'order_number', 'order id', 'orderid', 'Order ID'], '')
             ordernumber = str(ordernumber_raw).strip()
-            
-            # Column B: itemcode
-            itemcode_raw = (item.get('itemcode') or 
-                           item.get('item code') or 
-                           item.get('Item Code') or 
-                           item.get('item_code') or 
-                           item.get(list(item.keys())[1] if len(item.keys()) > 1 else None) or '')
+
+            # Column B: itemcode (support 'ItemCode', 'Item Code', 'item_code')
+            itemcode_raw = get_value(item, ['itemcode', 'ItemCode', 'Item Code', 'item_code'], '')
             itemcode = str(itemcode_raw).strip()
-            
+
             # Column C: product_description
-            product_description_raw = (item.get('product_description') or 
-                                     item.get('product description') or 
-                                     item.get('Product Description') or 
-                                     item.get('description') or 
-                                     item.get('Description') or 
-                                     item.get(list(item.keys())[2] if len(item.keys()) > 2 else None) or '')
+            product_description_raw = get_value(item, ['product_description', 'Product Description', 'product description', 'description', 'Description'], '')
             product_description = str(product_description_raw).strip()
-            
+
             # Column D: barcode
-            barcode_raw = (item.get('barcode') or 
-                          item.get('Barcode') or 
-                          item.get('bar_code') or 
-                          item.get('Bar Code') or 
-                          item.get(list(item.keys())[3] if len(item.keys()) > 3 else None) or '')
+            barcode_raw = get_value(item, ['barcode', 'Barcode', 'bar_code', 'Bar Code'], '')
             barcode = str(barcode_raw).strip()
-            
-            # Column E: customer_type
-            customer_type_raw = (item.get('customer_type') or 
-                               item.get('customer type') or 
-                               item.get('Customer Type') or 
-                               item.get('customer') or 
-                               item.get('Customer') or 
-                               item.get(list(item.keys())[4] if len(item.keys()) > 4 else None) or '')
+
+            # Column E: customer_type (often missing; avoid mapping unrelated fields like 'Source.Name')
+            customer_type_raw = get_value(item, ['customer_type', 'Customer Type', 'customer type'], '')
             customer_type = str(customer_type_raw).strip()
-            
+
             # Column F: quantity
-            quantity_value = (item.get('quantity') or 
-                            item.get('Quantity') or 
-                            item.get('qty') or 
-                            item.get('Qty') or 
-                            item.get(list(item.keys())[5] if len(item.keys()) > 5 else None) or 0)
-            
+            quantity_value = get_value(item, ['quantity', 'Quantity', 'qty', 'Qty'], 0)
+
             # Skip empty rows - at minimum we need ordernumber and itemcode
             if not ordernumber or not itemcode:
                 continue
-            
+
             # Convert quantity to integer
             try:
-                quantity = int(float(str(quantity_value))) if quantity_value else 0
+                quantity = int(float(str(quantity_value))) if quantity_value not in (None, '') else 0
             except (ValueError, TypeError):
                 quantity = 0
-            
+
+            # Enforce DB length limits to avoid 22001 errors
+            ordernumber_db = truncate(ordernumber, 50)
+            itemcode_db = truncate(itemcode, 50)
+            barcode_db = truncate(barcode, 100) if barcode else None
+            customer_type_db = truncate(customer_type, 50) if customer_type else None
+
             # Create record for dispatch_orders table with Excel row sequence preservation
             record = {
-                'ordernumber': str(ordernumber),
-                'itemcode': str(itemcode),
-                'product_description': str(product_description) if product_description else None,
-                'barcode': str(barcode) if barcode else None,
-                'customer_type': str(customer_type) if customer_type else None,
+                'ordernumber': ordernumber_db,
+                'itemcode': itemcode_db,
+                'product_description': product_description if product_description else None,
+                'barcode': barcode_db,
+                'customer_type': customer_type_db,
                 'quantity': quantity,
                 'excel_row_sequence': excel_row_index + 1  # CRITICAL: Preserves Excel file row order (1-based)
             }
+            if created_at_override:
+                record['created_at'] = created_at_override
             records.append(record)
         
         if not records:

@@ -15,6 +15,7 @@ from barcode.writer import ImageWriter
 import hashlib
 import requests
 from datetime import datetime, timedelta
+import re
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -22,7 +23,8 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QProgressBar, QStatusBar, QFrame,
     QScrollArea, QGroupBox, QSplitter, QComboBox, QDialog, 
     QDialogButtonBox, QListWidget, QTableWidget, QTableWidgetItem,
-    QHeaderView, QPlainTextEdit, QCheckBox, QTabWidget, QDateEdit
+    QHeaderView, QPlainTextEdit, QCheckBox, QTabWidget, QDateEdit,
+    QStackedWidget, QSizePolicy
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QDate, QPropertyAnimation, QEasingCurve, QRect
 from PySide6.QtGui import QFont, QPalette, QColor, QIcon, QPixmap, QPainter, QRegion
@@ -967,8 +969,13 @@ class OptimoRouteSorterApp(QMainWindow):
         self.delivery_data_with_drivers = {}
         self.delivery_json_file = "delivery_sequence_data.json"
         self.selected_pdf_files = []
+        # Independent state for the new, unrelated tab
+        self.newtab_selected_pdf_files = []
         self.processed_drivers = {}
         self.processing_thread = None
+        # Routes configuration
+        self.routes_config_path = None
+        self.route_options = []
         
         # OptimoRoute API setup
         self.api_key = self.load_api_key()
@@ -1002,6 +1009,13 @@ class OptimoRouteSorterApp(QMainWindow):
         if saved_output_dir:
             self.output_dir_edit.setText(saved_output_dir)
             self.update_output_button_text()
+        # Load saved independent output directory for the new tab
+        try:
+            saved_newtab_dir = self.load_output_directory_newtab()
+            if saved_newtab_dir and hasattr(self, 'newtab_output_dir_edit'):
+                self.newtab_output_dir_edit.setText(saved_newtab_dir)
+        except Exception:
+            pass
         
         # Load existing data
         self.load_existing_delivery_data()
@@ -1108,27 +1122,177 @@ class OptimoRouteSorterApp(QMainWindow):
         header_frame = self.create_header()
         main_layout.addWidget(header_frame)
         
-        # Content area - 3 column grid
+        # Resolve routes config path and load once UI widgets exist
+        self.routes_config_path = self.resolve_routes_config_path()
+        self.route_options = self.load_route_options(self.routes_config_path)
+
+        # Stacked content area with two pages (main and blank)
+        self.content_stack = QStackedWidget()
+
+        # Page 0: Main content (existing 3-column grid)
         content_widget = QWidget()
         content_layout = QGridLayout(content_widget)
         content_layout.setSpacing(10)
-        
-        # Create sections
         setup_section = self.create_setup_section()
         data_section = self.create_data_section()
         process_section = self.create_process_section()
-        
         content_layout.addWidget(setup_section, 0, 0)
         content_layout.addWidget(data_section, 0, 1)
         content_layout.addWidget(process_section, 0, 2)
-        
-        # Set equal column widths
         for i in range(3):
             content_layout.setColumnStretch(i, 1)
+        self.content_stack.addWidget(content_widget)
+
+        # Page 1: Independent new tab content
+        blank_widget = QWidget()
+        blank_layout = QVBoxLayout(blank_widget)
+        blank_layout.setSpacing(20)
+        blank_layout.setContentsMargins(20, 10, 20, 10)
+
+        # Section: Output directory selection (independent)
+        newtab_output_section = QFrame()
+        newtab_output_section.setObjectName("section")
+        newtab_output_layout = QVBoxLayout(newtab_output_section)
+        newtab_output_layout.setSpacing(12)
+
+        newtab_output_title = QLabel("Output Directory")
+        newtab_output_title.setObjectName("sectionTitle")
+        newtab_output_layout.addWidget(newtab_output_title)
+
+        self.newtab_output_dir_edit = QLineEdit()
+        self.newtab_output_dir_edit.setPlaceholderText("Select output directory for this tab...")
+        newtab_output_layout.addWidget(self.newtab_output_dir_edit)
+
+        self.newtab_output_btn = QPushButton("Change Output Location")
+        self.newtab_output_btn.clicked.connect(self.browse_output_directory_newtab)
+        newtab_output_layout.addWidget(self.newtab_output_btn)
+
+        # Add Route to collection (persists to route_options.json)
+        add_route_row = QHBoxLayout()
+        add_route_row.setSpacing(10)
+        add_route_row.addWidget(QLabel("Add Route:"))
+        self.newtab_add_route_edit = QLineEdit()
+        self.newtab_add_route_edit.setPlaceholderText("e.g. Dublin 015 or NI 1")
+        add_route_row.addWidget(self.newtab_add_route_edit)
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self.add_new_route_to_collection)
+        add_route_row.addWidget(add_btn)
+        view_btn = QPushButton("View Routes")
+        view_btn.clicked.connect(self.show_current_routes_dialog)
+        add_route_row.addWidget(view_btn)
+        newtab_output_layout.addLayout(add_route_row)
+
+        # we will place this section inside the left column later
+
+        # Section: PDF import (independent)
+        newtab_pdf_section = QFrame()
+        newtab_pdf_section.setObjectName("section")
+        newtab_pdf_layout = QVBoxLayout(newtab_pdf_section)
+        newtab_pdf_layout.setSpacing(12)
+        # Allow this section to expand to match results height
+        newtab_pdf_section.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        newtab_pdf_title = QLabel("Import PDF Files")
+        newtab_pdf_title.setObjectName("sectionTitle")
+        newtab_pdf_layout.addWidget(newtab_pdf_title)
+
+        # This tab will automatically segregate all routes based on route_options.json
+
+        newtab_pdf_btns = QHBoxLayout()
+        self.newtab_add_pdf_btn = QPushButton("Add PDFs")
+        self.newtab_add_pdf_btn.clicked.connect(self.add_newtab_pdf_files)
+        self.newtab_clear_pdf_btn = QPushButton("Clear")
+        self.newtab_clear_pdf_btn.setObjectName("secondaryButton")
+        self.newtab_clear_pdf_btn.clicked.connect(self.clear_newtab_pdf_files)
+        newtab_pdf_btns.addWidget(self.newtab_add_pdf_btn)
+        newtab_pdf_btns.addWidget(self.newtab_clear_pdf_btn)
+        newtab_pdf_layout.addLayout(newtab_pdf_btns)
+
+        self.newtab_pdf_list = QListWidget()
+        # Let the list expand to fill available vertical space
+        self.newtab_pdf_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        newtab_pdf_layout.addWidget(self.newtab_pdf_list)
+        # Make the list consume remaining vertical space inside this section
+        try:
+            newtab_pdf_layout.setStretch(0, 0)  # title
+            newtab_pdf_layout.setStretch(1, 0)  # buttons row
+            newtab_pdf_layout.setStretch(2, 1)  # list grows
+        except Exception:
+            pass
+
+        # we will place this section inside the left column later
+
+        # Results section (summary table)
+        results_section = QFrame()
+        results_section.setObjectName("section")
+        results_layout = QVBoxLayout(results_section)
+        results_layout.setSpacing(12)
+
+        results_title = QLabel("Results Summary")
+        results_title.setObjectName("sectionTitle")
+        results_layout.addWidget(results_title)
+
+        self.newtab_totals_label = QLabel("Totals: 0 pages imported, 0 pages matched, 0 missing")
+        results_layout.addWidget(self.newtab_totals_label)
+
+        self.newtab_results_table = QTableWidget()
+        self.newtab_results_table.setColumnCount(2)
+        self.newtab_results_table.setHorizontalHeaderLabels(["Route", "Pages"])
+        self.newtab_results_table.horizontalHeader().setStretchLastSection(True)
+        self.newtab_results_table.verticalHeader().setVisible(False)
+        results_layout.addWidget(self.newtab_results_table)
+
+        # we will place this section inside the right column later
+
+        # Action button moved beneath results summary (right column)
+        self.newtab_combine_btn = QPushButton("Combine Pages by Routes (Auto)")
+        self.newtab_combine_btn.setObjectName("primaryButton")
+        self.newtab_combine_btn.clicked.connect(self.combine_all_routes_from_bottom_region)
+        # Make the button stretch full width when placed
+        self.newtab_combine_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.newtab_combine_btn.setFixedHeight(44)
+
+        # Create two-column layout
+        columns = QHBoxLayout()
+        columns.setSpacing(10)
+        columns.setContentsMargins(0, 0, 0, 0)
+
+        # Left column: output + pdf import
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setSpacing(15)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(newtab_output_section)
+        left_layout.addWidget(newtab_pdf_section)
+        # Make the PDF section consume remaining vertical space in the left column
+        try:
+            left_layout.setStretch(0, 0)  # output dir section
+            left_layout.setStretch(1, 1)  # pdf section grows
+        except Exception:
+            pass
+        left_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        columns.addWidget(left_widget, 1)
+
+        # Right column: results (tall)
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setSpacing(15)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(results_section)
+        # Make results section stretch to match left column height
+        results_section.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        columns.addWidget(right_widget, 2)
+
+        blank_layout.addLayout(columns)
+
+        # Full-width combine button beneath both columns
+        blank_layout.addWidget(self.newtab_combine_btn)
+
+        self.content_stack.addWidget(blank_widget)
+
+        main_layout.addWidget(self.content_stack)
         
-        main_layout.addWidget(content_widget)
-        
-        # Process button
+        # Process button (hidden when new tab is active)
         self.process_all_btn = QPushButton("Process Delivery PDFs")
         self.process_all_btn.setObjectName("primaryButton")
         self.process_all_btn.clicked.connect(self.process_all_pdfs_and_packing)
@@ -1154,9 +1318,17 @@ class OptimoRouteSorterApp(QMainWindow):
         layout = QHBoxLayout(header_widget)
         layout.setContentsMargins(0, 15, 0, 15)
         
-        # Add left margin for refresh button
+        # Add left margin for buttons
         layout.addSpacing(20)
         
+        # New: Switch view button (toggles between main and new tab)
+        self.blank_tab_btn = QPushButton("⇄")
+        self.blank_tab_btn.setObjectName("settingsButton")
+        self.blank_tab_btn.setToolTip("Switch between tabs")
+        self.blank_tab_btn.setFixedSize(40, 40)
+        self.blank_tab_btn.clicked.connect(self.toggle_blank_tab)
+        layout.addWidget(self.blank_tab_btn)
+
         # Refresh button
         self.refresh_btn = QPushButton("🔄")
         self.refresh_btn.setObjectName("refreshButton")
@@ -1176,9 +1348,9 @@ class OptimoRouteSorterApp(QMainWindow):
         # Spacer between buttons and title
         layout.addSpacing(15)
         
-        title_label = QLabel("OptimoRoute Sorter")
-        title_label.setObjectName("headerTitle")
-        layout.addWidget(title_label)
+        self.header_title_label = QLabel("OptimoRoute Sorter")
+        self.header_title_label.setObjectName("headerTitle")
+        layout.addWidget(self.header_title_label)
         
         layout.addStretch()
         
@@ -1190,6 +1362,467 @@ class OptimoRouteSorterApp(QMainWindow):
         layout.addSpacing(20)
         
         return header_widget
+
+    def toggle_blank_tab(self):
+        """Switch between main content and a blank page."""
+        if hasattr(self, 'content_stack'):
+            current_index = self.content_stack.currentIndex()
+            self.content_stack.setCurrentIndex(1 if current_index == 0 else 0)
+            # Hide/show main tab process button based on active page
+            if hasattr(self, 'process_all_btn'):
+                self.process_all_btn.setVisible(self.content_stack.currentIndex() == 0)
+            # Update header title for the active tab
+            self.update_header_for_tab()
+
+    def update_header_for_tab(self):
+        try:
+            if not hasattr(self, 'header_title_label'):
+                return
+            if hasattr(self, 'content_stack') and self.content_stack.currentIndex() == 1:
+                self.header_title_label.setText("PDF Sorter")
+                self.setWindowTitle("PDF Sorter - Delivery Processing")
+            else:
+                self.header_title_label.setText("OptimoRoute Sorter")
+                self.setWindowTitle("OptimoRoute Sorter - Delivery Processing")
+        except Exception:
+            pass
+
+    # ===== New Tab (independent) handlers =====
+    def browse_output_directory_newtab(self):
+        directory = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        if directory:
+            self.newtab_output_dir_edit.setText(directory)
+            # persist separately for this new tab
+            self.save_output_directory_newtab(directory)
+
+    def add_newtab_pdf_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Select PDF files", "", "PDF Files (*.pdf)")
+        if files:
+            self.newtab_selected_pdf_files.extend(files)
+            # de-duplicate while preserving order
+            seen = set()
+            unique_files = []
+            for f in self.newtab_selected_pdf_files:
+                if f not in seen:
+                    seen.add(f)
+                    unique_files.append(f)
+            self.newtab_selected_pdf_files = unique_files
+            self.refresh_newtab_pdf_list()
+
+    def clear_newtab_pdf_files(self):
+        self.newtab_selected_pdf_files = []
+        self.newtab_pdf_list.clear()
+
+    def refresh_newtab_pdf_list(self):
+        self.newtab_pdf_list.clear()
+        for f in self.newtab_selected_pdf_files:
+            self.newtab_pdf_list.addItem(f)
+
+    # ===== Route options helpers =====
+    def resolve_routes_config_path(self):
+        # Prefer app_data/route_options.json, fall back to project root
+        candidate_paths = [
+            os.path.join("app_data", "route_options.json"),
+            os.path.join(os.getcwd(), "route_options.json"),
+        ]
+        for p in candidate_paths:
+            parent = os.path.dirname(p)
+            if parent and not os.path.exists(parent):
+                try:
+                    os.makedirs(parent, exist_ok=True)
+                except Exception:
+                    pass
+        return candidate_paths[0]
+
+    def load_route_options(self, path):
+        try:
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        return [str(x) for x in data if x]
+                    if isinstance(data, dict) and 'routes' in data and isinstance(data['routes'], list):
+                        return [str(x) for x in data['routes'] if x]
+            # default
+            return ["Dublin002"]
+        except Exception:
+            return ["Dublin002"]
+
+    def populate_route_combo(self):
+        try:
+            self.newtab_route_combo.clear()
+            options = self.route_options if hasattr(self, 'route_options') and self.route_options else ["Dublin002"]
+            self.newtab_route_combo.addItems(options)
+        except Exception:
+            pass
+
+    def add_new_route_to_collection(self):
+        try:
+            new_route = (self.newtab_add_route_edit.text() or "").strip()
+            if not new_route:
+                return
+            # Load existing
+            routes = set(self.route_options or [])
+            if new_route not in routes:
+                routes.add(new_route)
+                self.route_options = sorted(routes)
+                # Save to JSON
+                path = self.routes_config_path or self.resolve_routes_config_path()
+                try:
+                    with open(path, 'w', encoding='utf-8') as f:
+                        json.dump(sorted(list(self.route_options)), f, indent=2, ensure_ascii=False)
+                except Exception as e:
+                    print(f"Error saving routes: {e}")
+                self.newtab_add_route_edit.clear()
+        except Exception:
+            pass
+
+    def show_current_routes_dialog(self):
+        try:
+            routes = self.route_options or []
+            if not routes:
+                QMessageBox.information(self, "Routes", "No routes configured.")
+                return
+            text = "\n".join(routes)
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Configured Routes")
+            dlg.resize(400, 500)
+            layout = QVBoxLayout(dlg)
+            list_widget = QListWidget()
+            list_widget.addItems(routes)
+            layout.addWidget(list_widget)
+            btns = QDialogButtonBox(QDialogButtonBox.Close)
+            btns.rejected.connect(dlg.reject)
+            layout.addWidget(btns)
+            dlg.exec()
+        except Exception:
+            pass
+
+    def generate_route_variants(self, route_label):
+        """Return normalized variants for matching, with aliases and zeros handled.
+        Examples:
+          - 'Dublin 001' -> dublin 001/dublin001/dublin 1/dublin1
+          - 'Northern Ireland 1' -> northern ireland 1/ni 1 and packed/space variants
+        """
+        try:
+            label = (route_label or "").strip()
+            lower_label = label.lower()
+
+            # Define canonical bases and their aliases
+            base_aliases = {
+                "dublin": ["dublin"],
+                "northern ireland": ["northern ireland", "ni"],
+            }
+
+            detected_num = None
+            matched_aliases = None
+
+            for canonical, aliases in base_aliases.items():
+                for alias in aliases:
+                    pattern = rf"(?i)\b{re.escape(alias)}\b\s*0*(\d{{1,3}})\b"
+                    m = re.search(pattern, lower_label, flags=re.IGNORECASE)
+                    if m:
+                        detected_num = int(m.group(1))
+                        matched_aliases = aliases
+                        break
+                if detected_num is not None:
+                    break
+
+            if detected_num is None:
+                base = lower_label
+                return [base, base.replace(" ", "")]
+
+            num_padded = f"{detected_num:03d}"
+            num_unpadded = str(detected_num)
+
+            variants = []
+            for alias in matched_aliases:
+                alias_l = alias.lower()
+                variants.extend([
+                    f"{alias_l} {num_padded}",
+                    f"{alias_l}{num_padded}",
+                    f"{alias_l} {num_unpadded}",
+                    f"{alias_l}{num_unpadded}",
+                ])
+
+            # unique, lowered
+            lowered = []
+            for v in variants:
+                v = v.lower()
+                if v not in lowered:
+                    lowered.append(v)
+            return lowered
+        except Exception:
+            base = (route_label or "").lower()
+            return [base, base.replace(" ", "")]
+
+    # ===== New Tab config persistence =====
+    def save_output_directory_newtab(self, directory):
+        try:
+            config_file = "api_config.json"
+            config = {}
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            config['newtab_output_directory'] = directory
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error saving new tab output directory: {e}")
+
+    def load_output_directory_newtab(self):
+        try:
+            config_file = "api_config.json"
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return config.get('newtab_output_directory', '')
+            return ''
+        except Exception as e:
+            print(f"Error loading new tab output directory: {e}")
+            return ''
+
+    # ===== New Tab core processing =====
+    def combine_route_from_bottom_region(self):
+        try:
+            if not self.newtab_selected_pdf_files:
+                QMessageBox.information(self, "No PDFs", "Please add PDF files first.")
+                return
+
+            output_base = self.newtab_output_dir_edit.text().strip()
+            if not output_base:
+                QMessageBox.information(self, "No Output Folder", "Please choose an output folder first.")
+                return
+
+            # Deprecated single-route path kept for compatibility if needed later
+            route_code = "Dublin002"
+            route_variants = self.generate_route_variants(route_code)
+
+            matched_pages = []
+            for pdf_path in self.newtab_selected_pdf_files:
+                try:
+                    doc = fitz.open(pdf_path)
+                except Exception:
+                    continue
+
+                for page_index in range(len(doc)):
+                    page = doc.load_page(page_index)
+                    rect = page.rect
+                    bottom_region = fitz.Rect(rect.x0, rect.y0 + (rect.height * 4/5.0), rect.x1, rect.y1)
+                    text = page.get_text("text", clip=bottom_region) or ""
+                    text_lower = text.lower()
+                    if any(variant in text_lower for variant in route_variants):
+                        matched_pages.append((pdf_path, page_index))
+                doc.close()
+
+            if not matched_pages:
+                QMessageBox.information(self, "No Matches", f"No pages found with '{route_code}' in the bottom 1/5 of the page.")
+                return
+
+            # Create output directory for this combined route
+            safe_route = re.sub(r"[^A-Za-z0-9_-]+", "_", route_code)
+            route_folder = os.path.join(output_base, safe_route)
+            os.makedirs(route_folder, exist_ok=True)
+
+            output_pdf_path = os.path.join(route_folder, f"{safe_route}.pdf")
+            out_doc = fitz.open()
+            for src_path, pnum in matched_pages:
+                try:
+                    src_doc = fitz.open(src_path)
+                    out_doc.insert_pdf(src_doc, from_page=pnum, to_page=pnum)
+                    src_doc.close()
+                except Exception:
+                    continue
+
+            if out_doc.page_count == 0:
+                out_doc.close()
+                QMessageBox.information(self, "No Output", "No pages could be added to the output PDF.")
+                return
+
+            out_doc.save(output_pdf_path)
+            out_doc.close()
+
+            QMessageBox.information(self, "Done", f"Created combined PDF for {route_code}:\n{output_pdf_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred: {e}")
+
+    def combine_all_routes_from_bottom_region(self):
+        try:
+            if not self.newtab_selected_pdf_files:
+                QMessageBox.information(self, "No PDFs", "Please add PDF files first.")
+                return
+
+            output_base = self.newtab_output_dir_edit.text().strip()
+            if not output_base:
+                QMessageBox.information(self, "No Output Folder", "Please choose an output folder first.")
+                return
+
+            # Prepare session output folder inside selected output directory
+            session_folder = os.path.join(output_base, f"Combined_Routes_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}")
+            os.makedirs(session_folder, exist_ok=True)
+
+            # Prepare a single combined PDF of all imported PDFs (in order)
+            combined_all_doc = fitz.open()
+
+            # Build search map: route -> variants
+            routes = self.route_options if self.route_options else ["Dublin 001"]
+            route_to_variants = {r: self.generate_route_variants(r) for r in routes}
+
+            # Collect matches per route: list of (file, page_index)
+            matches = {r: [] for r in routes}
+            missing_pages = []  # pages without any route match
+
+            total_pages_imported = 0
+
+            for pdf_path in self.newtab_selected_pdf_files:
+                try:
+                    doc = fitz.open(pdf_path)
+                except Exception:
+                    continue
+
+                num_pages = len(doc)
+                total_pages_imported += num_pages
+
+                # Append entire document to the overall combined PDF (preserve order)
+                try:
+                    combined_all_doc.insert_pdf(doc)
+                except Exception:
+                    pass
+
+                # Precompute route label per page (or None)
+                page_route = [None] * num_pages
+                for page_index in range(num_pages):
+                    page = doc.load_page(page_index)
+                    rect = page.rect
+                    bottom_region = fitz.Rect(
+                        rect.x0, rect.y0 + (rect.height * 4 / 5.0), rect.x1, rect.y1
+                    )
+                    text_lower = (page.get_text("text", clip=bottom_region) or "").lower()
+                    for route_label, variants in route_to_variants.items():
+                        # Strict match: check for whole-word match with word boundaries
+                        matched = False
+                        for variant in variants:
+                            # Create regex that enforces word boundaries around the variant
+                            # Replace spaces in variant with \s+ to allow flexible whitespace
+                            pattern = re.escape(variant).replace("\\ ", "\\s+")
+                            regex = rf"(?i)(?<![A-Za-z0-9]){pattern}(?![A-Za-z0-9])"
+                            if re.search(regex, text_lower, flags=re.IGNORECASE):
+                                matched = True
+                                break
+                        if matched:
+                            page_route[page_index] = route_label
+                            break
+
+                visited = set()
+                for page_index in range(num_pages):
+                    if page_index in visited:
+                        continue
+
+                    route_label = page_route[page_index]
+                    if route_label is not None:
+                        # Assign current page
+                        matches[route_label].append((pdf_path, page_index))
+                        visited.add(page_index)
+
+                        # If previous 1-2 pages exist and have no route, pair them with this page
+                        for back_offset in (1, 2):
+                            prev_index = page_index - back_offset
+                            if (
+                                prev_index >= 0
+                                and prev_index not in visited
+                                and page_route[prev_index] is None
+                            ):
+                                matches[route_label].append((pdf_path, prev_index))
+                                visited.add(prev_index)
+                    # Else: leave unvisited for now; may be captured by next page if paired
+
+                # Any pages not visited are missing
+                for idx in range(num_pages):
+                    if idx not in visited:
+                        missing_pages.append((pdf_path, idx))
+                doc.close()
+
+            any_output = False
+            for route_label, pages in matches.items():
+                if not pages:
+                    continue
+                any_output = True
+                safe_route = re.sub(r"[^A-Za-z0-9_-]+", "_", route_label)
+                output_pdf_path = os.path.join(session_folder, f"{safe_route}.pdf")
+
+                out_doc = fitz.open()
+                for src_path, pnum in pages:
+                    try:
+                        src_doc = fitz.open(src_path)
+                        out_doc.insert_pdf(src_doc, from_page=pnum, to_page=pnum)
+                        src_doc.close()
+                    except Exception:
+                        continue
+                if out_doc.page_count:
+                    out_doc.save(output_pdf_path)
+                out_doc.close()
+
+            # Create Missing Routes PDF if needed
+            missing_count = len(missing_pages)
+            if missing_count:
+                any_output = True
+                missing_pdf_path = os.path.join(session_folder, "Missing_Routes.pdf")
+                out_missing = fitz.open()
+                for src_path, pnum in missing_pages:
+                    try:
+                        src_doc = fitz.open(src_path)
+                        out_missing.insert_pdf(src_doc, from_page=pnum, to_page=pnum)
+                        src_doc.close()
+                    except Exception:
+                        continue
+                if out_missing.page_count:
+                    out_missing.save(missing_pdf_path)
+                out_missing.close()
+
+            # Write the single combined PDF of all pages
+            if combined_all_doc.page_count:
+                combined_all_path = os.path.join(session_folder, "All_Pages_Combined.pdf")
+                try:
+                    combined_all_doc.save(combined_all_path)
+                except Exception:
+                    pass
+            combined_all_doc.close()
+
+            # Update summary table and totals label
+            per_route_counts = {route: len(pages) for route, pages in matches.items() if len(pages) > 0}
+            total_matched = sum(per_route_counts.values())
+            if hasattr(self, 'newtab_totals_label') and hasattr(self, 'newtab_results_table'):
+                self.newtab_totals_label.setText(
+                    f"Totals: {total_pages_imported} pages imported, {total_matched} matched, {missing_count} missing"
+                )
+                rows = len(per_route_counts)
+                self.newtab_results_table.setRowCount(rows)
+                self.newtab_results_table.setColumnCount(2)
+                self.newtab_results_table.setHorizontalHeaderLabels(["Route", "Pages"])
+                r = 0
+                for route_label, count in sorted(per_route_counts.items()):
+                    self.newtab_results_table.setItem(r, 0, QTableWidgetItem(route_label))
+                    self.newtab_results_table.setItem(r, 1, QTableWidgetItem(str(count)))
+                    r += 1
+
+            if not any_output:
+                QMessageBox.information(self, "No Matches", "No pages matched any route in the bottom 1/5 of the pages.")
+                return
+
+            # Offer to open the output folder
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Done")
+            msg.setText(f"Created combined PDFs in:\n{session_folder}")
+            open_btn = msg.addButton("Open Folder", QMessageBox.AcceptRole)
+            msg.addButton("Close", QMessageBox.RejectRole)
+            msg.exec()
+            if msg.clickedButton() is open_btn:
+                try:
+                    self.open_output_directory(session_folder)
+                except Exception:
+                    pass
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred: {e}")
     
     def create_setup_section(self):
         """Create setup section"""

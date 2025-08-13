@@ -89,7 +89,10 @@ CREATE TABLE dispatch_orders (
     order_finish_time TIMESTAMP WITH TIME ZONE,
     order_duration INTERVAL,
     picker_name VARCHAR(50),
+    scanned_by VARCHAR(50),
     full_or_partial_picking BOOLEAN,
+    item_skipped BOOLEAN,
+    delivery_date DATE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
