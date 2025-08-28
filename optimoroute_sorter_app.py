@@ -1420,19 +1420,28 @@ class OptimoRouteSorterApp(QMainWindow):
 
     # ===== Route options helpers =====
     def resolve_routes_config_path(self):
-        # Prefer app_data/route_options.json, fall back to project root
-        candidate_paths = [
-            os.path.join("app_data", "route_options.json"),
-            os.path.join(os.getcwd(), "route_options.json"),
-        ]
-        for p in candidate_paths:
-            parent = os.path.dirname(p)
-            if parent and not os.path.exists(parent):
-                try:
-                    os.makedirs(parent, exist_ok=True)
-                except Exception:
-                    pass
-        return candidate_paths[0]
+        # Get the directory where the executable/script is located
+        if getattr(sys, 'frozen', False):
+            # Running as compiled executable
+            base_path = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        
+        # Create app_data directory in the same location as the executable/script
+        app_data_dir = os.path.join(base_path, "app_data")
+        try:
+            os.makedirs(app_data_dir, exist_ok=True)
+        except Exception as e:
+            print(f"Error creating app_data directory: {e}")
+            # Fallback to current working directory
+            app_data_dir = os.path.join(os.getcwd(), "app_data")
+            try:
+                os.makedirs(app_data_dir, exist_ok=True)
+            except Exception:
+                pass
+        
+        return os.path.join(app_data_dir, "route_options.json")
 
     def load_route_options(self, path):
         try:
@@ -1460,22 +1469,46 @@ class OptimoRouteSorterApp(QMainWindow):
         try:
             new_route = (self.newtab_add_route_edit.text() or "").strip()
             if not new_route:
+                QMessageBox.warning(self, "Invalid Route", "Please enter a route name.")
                 return
-            # Load existing
+            
+            # Load existing routes
             routes = set(self.route_options or [])
-            if new_route not in routes:
-                routes.add(new_route)
-                self.route_options = sorted(routes)
-                # Save to JSON
-                path = self.routes_config_path or self.resolve_routes_config_path()
-                try:
-                    with open(path, 'w', encoding='utf-8') as f:
-                        json.dump(sorted(list(self.route_options)), f, indent=2, ensure_ascii=False)
-                except Exception as e:
-                    print(f"Error saving routes: {e}")
+            if new_route in routes:
+                QMessageBox.information(self, "Route Exists", f"Route '{new_route}' already exists in the collection.")
+                return
+            
+            # Add new route
+            routes.add(new_route)
+            self.route_options = sorted(routes)
+            
+            # Save to JSON
+            path = self.routes_config_path or self.resolve_routes_config_path()
+            try:
+                # Ensure the directory exists
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(sorted(list(self.route_options)), f, indent=2, ensure_ascii=False)
+                
+                # Update the combo box
+                self.populate_route_combo()
+                
+                # Clear the input field
                 self.newtab_add_route_edit.clear()
-        except Exception:
-            pass
+                
+                # Show success message
+                QMessageBox.information(self, "Success", f"Route '{new_route}' has been added to the collection and saved to:\n{path}")
+                
+            except Exception as e:
+                error_msg = f"Error saving routes to {path}: {str(e)}"
+                print(error_msg)
+                QMessageBox.critical(self, "Save Error", error_msg)
+                
+        except Exception as e:
+            error_msg = f"Error adding route: {str(e)}"
+            print(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
 
     def show_current_routes_dialog(self):
         try:
@@ -1661,9 +1694,6 @@ class OptimoRouteSorterApp(QMainWindow):
             session_folder = os.path.join(output_base, f"Combined_Routes_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}")
             os.makedirs(session_folder, exist_ok=True)
 
-            # Prepare a single combined PDF of all imported PDFs (in order)
-            combined_all_doc = fitz.open()
-
             # Build search map: route -> variants
             routes = self.route_options if self.route_options else ["Dublin 001"]
             route_to_variants = {r: self.generate_route_variants(r) for r in routes}
@@ -1682,12 +1712,6 @@ class OptimoRouteSorterApp(QMainWindow):
 
                 num_pages = len(doc)
                 total_pages_imported += num_pages
-
-                # Append entire document to the overall combined PDF (preserve order)
-                try:
-                    combined_all_doc.insert_pdf(doc)
-                except Exception:
-                    pass
 
                 # Precompute route label per page (or None)
                 page_route = [None] * num_pages
@@ -1750,8 +1774,15 @@ class OptimoRouteSorterApp(QMainWindow):
                 safe_route = re.sub(r"[^A-Za-z0-9_-]+", "_", route_label)
                 output_pdf_path = os.path.join(session_folder, f"{safe_route}.pdf")
 
+                # Reverse the order within each route group so pages with routes come first
+                # This ensures route pages are printed first, then delivery notes
+                sorted_pages = list(reversed(pages))
+
+                # Update status directly since this method runs synchronously
+                self.update_status(f"✓ {route_label}: Processing {len(pages)} pages (route pages first, then delivery notes)")
+
                 out_doc = fitz.open()
-                for src_path, pnum in pages:
+                for src_path, pnum in sorted_pages:
                     try:
                         src_doc = fitz.open(src_path)
                         out_doc.insert_pdf(src_doc, from_page=pnum, to_page=pnum)
@@ -1768,6 +1799,9 @@ class OptimoRouteSorterApp(QMainWindow):
                 any_output = True
                 missing_pdf_path = os.path.join(session_folder, "Missing_Routes.pdf")
                 out_missing = fitz.open()
+                
+                # For missing routes PDF, all pages are without routes, so no sorting needed
+                # But we'll maintain the original order from the source files
                 for src_path, pnum in missing_pages:
                     try:
                         src_doc = fitz.open(src_path)
@@ -1779,13 +1813,47 @@ class OptimoRouteSorterApp(QMainWindow):
                     out_missing.save(missing_pdf_path)
                 out_missing.close()
 
-            # Write the single combined PDF of all pages
+            # Create combined PDF by concatenating route-specific PDFs in order
+            combined_all_path = os.path.join(session_folder, "All_Pages_Combined.pdf")
+            combined_all_doc = fitz.open()
+            
+            # Add route-specific PDFs in sorted order
+            for route_label in sorted(matches.keys()):
+                pages = matches[route_label]
+                if not pages:
+                    continue
+                    
+                safe_route = re.sub(r"[^A-Za-z0-9_-]+", "_", route_label)
+                route_pdf_path = os.path.join(session_folder, f"{safe_route}.pdf")
+                
+                # Check if the route PDF was created successfully
+                if os.path.exists(route_pdf_path):
+                    try:
+                        route_doc = fitz.open(route_pdf_path)
+                        combined_all_doc.insert_pdf(route_doc)
+                        route_doc.close()
+                        self.update_status(f"Added {route_label} PDF to combined file")
+                    except Exception as e:
+                        self.update_status(f"Error adding {route_label} PDF to combined file: {str(e)}")
+            
+            # Add missing routes PDF if it exists
+            missing_pdf_path = os.path.join(session_folder, "Missing_Routes.pdf")
+            if os.path.exists(missing_pdf_path):
+                try:
+                    missing_doc = fitz.open(missing_pdf_path)
+                    combined_all_doc.insert_pdf(missing_doc)
+                    missing_doc.close()
+                    self.update_status("Added Missing_Routes PDF to combined file")
+                except Exception as e:
+                    self.update_status(f"Error adding Missing_Routes PDF to combined file: {str(e)}")
+            
+            # Save the combined PDF
             if combined_all_doc.page_count:
-                combined_all_path = os.path.join(session_folder, "All_Pages_Combined.pdf")
                 try:
                     combined_all_doc.save(combined_all_path)
-                except Exception:
-                    pass
+                    self.update_status(f"Created combined PDF with {combined_all_doc.page_count} pages")
+                except Exception as e:
+                    self.update_status(f"Error saving combined PDF: {str(e)}")
             combined_all_doc.close()
 
             # Update summary table and totals label

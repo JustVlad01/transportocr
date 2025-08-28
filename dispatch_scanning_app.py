@@ -147,7 +147,12 @@ class ProcessingResultsDialog(QDialog):
             driver_tab = self.create_driver_tab(results.get('driver_details', {}))
             tab_widget.addTab(driver_tab, "Driver Details")
         
-        # Tab 3: Failed Files (if any)
+        # Tab 3: Barcode Status (if there are any issues)
+        if results.get('barcode_generation_errors') or results.get('order_numbers_not_found'):
+            barcode_status_tab = self.create_barcode_status_tab(results)
+            tab_widget.addTab(barcode_status_tab, "Barcode Status")
+        
+        # Tab 4: Failed Files (if any)
         if results.get('failed_files'):
             failed_tab = self.create_failed_tab(results.get('failed_files', []))
             tab_widget.addTab(failed_tab, "Failed Files")
@@ -348,6 +353,110 @@ class ProcessingResultsDialog(QDialog):
         
         return widget
     
+    def create_barcode_status_tab(self, results):
+        """Create tab showing barcode generation and order number matching status"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Summary section
+        summary_label = QLabel("Barcode Generation and Order Number Status")
+        summary_label.setObjectName("sectionTitle")
+        layout.addWidget(summary_label)
+        
+        # Statistics
+        stats_text = QLabel(f"""
+        <b>Summary:</b>
+        <br>• Barcodes Generated: {len(results.get('order_numbers_found_in_pdfs', []))}
+        <br>• Barcode Generation Failures: {len(results.get('barcode_generation_errors', {}))}
+        <br>• Order Numbers Found in PDFs: {len(results.get('order_numbers_found_in_pdfs', []))}
+        <br>• Order Numbers Not Found in PDFs: {len(results.get('order_numbers_not_found', []))}
+        """)
+        stats_text.setObjectName("infoText")
+        stats_text.setWordWrap(True)
+        layout.addWidget(stats_text)
+        
+        # Barcode generation errors
+        if results.get('barcode_generation_errors'):
+            errors_label = QLabel("❌ Barcode Generation Failures:")
+            errors_label.setObjectName("warningText")
+            layout.addWidget(errors_label)
+            
+            errors_table = QTableWidget()
+            errors_table.setColumnCount(2)
+            errors_table.setHorizontalHeaderLabels(["Order Number", "Error Reason"])
+            errors_table.setRowCount(len(results.get('barcode_generation_errors', {})))
+            
+            for i, (order_id, error) in enumerate(results.get('barcode_generation_errors', {}).items()):
+                # Order number
+                order_item = QTableWidgetItem(str(order_id))
+                order_item.setFlags(order_item.flags() & ~Qt.ItemIsEditable)
+                errors_table.setItem(i, 0, order_item)
+                
+                # Error reason
+                error_item = QTableWidgetItem(error)
+                error_item.setFlags(error_item.flags() & ~Qt.ItemIsEditable)
+                errors_table.setItem(i, 1, error_item)
+            
+            errors_table.resizeColumnsToContents()
+            errors_table.horizontalHeader().setStretchLastSection(True)
+            layout.addWidget(errors_table)
+        
+        # Order numbers not found in PDFs
+        if results.get('order_numbers_not_found'):
+            not_found_label = QLabel("❌ Order Numbers Not Found in PDF Files:")
+            not_found_label.setObjectName("warningText")
+            layout.addWidget(not_found_label)
+            
+            not_found_table = QTableWidget()
+            not_found_table.setColumnCount(2)
+            not_found_table.setHorizontalHeaderLabels(["Order Number", "Status"])
+            not_found_table.setRowCount(len(results.get('order_numbers_not_found', [])))
+            
+            for i, order_id in enumerate(results.get('order_numbers_not_found', [])):
+                # Order number
+                order_item = QTableWidgetItem(str(order_id))
+                order_item.setFlags(order_item.flags() & ~Qt.ItemIsEditable)
+                not_found_table.setItem(i, 0, order_item)
+                
+                # Status
+                status_item = QTableWidgetItem("No matching pages found in any PDF file")
+                status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+                not_found_table.setItem(i, 1, status_item)
+            
+            not_found_table.resizeColumnsToContents()
+            not_found_table.horizontalHeader().setStretchLastSection(True)
+            layout.addWidget(not_found_table)
+        
+        # Successfully processed order numbers
+        if results.get('order_numbers_found_in_pdfs'):
+            success_label = QLabel("✅ Successfully Processed Order Numbers:")
+            success_label.setObjectName("successText")
+            layout.addWidget(success_label)
+            
+            success_table = QTableWidget()
+            success_table.setColumnCount(2)
+            success_table.setHorizontalHeaderLabels(["Order Number", "Pages Found"])
+            success_table.setRowCount(len(results.get('order_numbers_found_in_pdfs', [])))
+            
+            for i, order_id in enumerate(results.get('order_numbers_found_in_pdfs', [])):
+                # Order number
+                order_item = QTableWidgetItem(str(order_id))
+                order_item.setFlags(order_item.flags() & ~Qt.ItemIsEditable)
+                success_table.setItem(i, 0, order_item)
+                
+                # Pages found
+                page_count = len(results.get('driver_details', {}).get(order_id, {}).get('orders', []))
+                pages_item = QTableWidgetItem(str(page_count))
+                pages_item.setFlags(pages_item.flags() & ~Qt.ItemIsEditable)
+                success_table.setItem(i, 1, pages_item)
+            
+            success_table.resizeColumnsToContents()
+            success_table.horizontalHeader().setStretchLastSection(True)
+            layout.addWidget(success_table)
+        
+        layout.addStretch()
+        return widget
+    
     def create_diagnostic_tab(self, results):
         """Create diagnostic tab when no matching orders are found"""
         widget = QWidget()
@@ -529,7 +638,7 @@ class DispatchScanningApp(QMainWindow):
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Dispatch Scanning - Streamlined Processing")
-        self.setGeometry(100, 100, 1000, 650)
+        self.setGeometry(100, 100, 1300, 700)
         
         # Central widget
         central_widget = QWidget()
@@ -537,27 +646,30 @@ class DispatchScanningApp(QMainWindow):
         
         # Main layout
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(12)
-        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(20, 20, 20, 20)
         
         # Header
         header_frame = self.create_header()
         main_layout.addWidget(header_frame)
         
-        # Content area - single column for picking section
-        picking_section = self.create_picking_section()
-        main_layout.addWidget(picking_section)
+        # Content area - two column layout
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(20)
         
-        # Process button
-        self.process_picking_btn = QPushButton("Process PDF Files & Upload")
-        self.process_picking_btn.setObjectName("primaryButton")
-        self.process_picking_btn.clicked.connect(self.process_picking_dockets)
-        self.process_picking_btn.setFixedHeight(35)
-        main_layout.addWidget(self.process_picking_btn)
+        # Left column - File Selection
+        left_column = self.create_file_selection_column()
+        content_layout.addWidget(left_column)
         
-        # Output section
-        output_section = self.create_output_section()
-        main_layout.addWidget(output_section)
+        # Right column - Processing Section
+        right_column = self.create_processing_column()
+        content_layout.addWidget(right_column)
+        
+        # Set column proportions (50% left, 50% right)
+        content_layout.setStretch(0, 5)
+        content_layout.setStretch(1, 5)
+        
+        main_layout.addLayout(content_layout)
         
         # Status bar
         self.status_bar = QStatusBar()
@@ -588,28 +700,56 @@ class DispatchScanningApp(QMainWindow):
         
         return header_frame
     
-    def create_picking_section(self):
-        """Create picking dockets section"""
+
+    
+
+    
+
+    
+    def create_file_selection_column(self):
+        """Create left column with file selection controls"""
+        column = QFrame()
+        column.setObjectName("columnFrame")
+        column.setFixedWidth(550)
+        
+        layout = QVBoxLayout(column)
+        layout.setSpacing(15)
+        
+        # Output folder section
+        output_section = self.create_output_folder_section()
+        layout.addWidget(output_section)
+        
+        # Excel file section
+        excel_section = self.create_excel_file_section()
+        layout.addWidget(excel_section)
+        
+        # Date picker section
+        date_section = self.create_date_section()
+        layout.addWidget(date_section)
+        
+        # PDF files section
+        pdf_section = self.create_pdf_files_section()
+        layout.addWidget(pdf_section)
+        
+        layout.addStretch()
+        
+        return column
+    
+    def create_output_folder_section(self):
+        """Create output folder selection section"""
         section = QFrame()
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
         
         # Section title
-        title = QLabel("Process Picking Dockets & Upload Store Orders")
+        title = QLabel("📁 Output Folder")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
         
-       
-        
-        # Output folder selection subsection (moved to top)
-        output_label = QLabel("Output Folder:")
-        output_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(output_label)
-        
-        # Output folder selection row
-        output_btn_layout = QHBoxLayout()
+        # Button row
+        btn_layout = QHBoxLayout()
         self.browse_output_btn = QPushButton("Select Output Folder")
         self.browse_output_btn.clicked.connect(self.browse_output_folder)
         
@@ -617,84 +757,98 @@ class DispatchScanningApp(QMainWindow):
         self.clear_output_btn.setObjectName("secondaryButton")
         self.clear_output_btn.clicked.connect(self.clear_output_folder)
         
-        output_btn_layout.addWidget(self.browse_output_btn)
-        output_btn_layout.addWidget(self.clear_output_btn)
-        layout.addLayout(output_btn_layout)
+        btn_layout.addWidget(self.browse_output_btn)
+        btn_layout.addWidget(self.clear_output_btn)
+        layout.addLayout(btn_layout)
         
-        # Output folder display
+        # Status display
         self.output_folder_label = QLabel("Files will be saved in a date-based subfolder (YYYY-MM-DD)")
         self.output_folder_label.setObjectName("infoText")
         self.output_folder_label.setWordWrap(True)
         layout.addWidget(self.output_folder_label)
         
-        # Excel file with store orders subsection (moved after output folder)
-        excel_label = QLabel("Store Order Excel File (for barcodes & database upload):")
-        excel_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(excel_label)
+        return section
+    
+    def create_excel_file_section(self):
+        """Create Excel file selection section"""
+        section = QFrame()
+        section.setObjectName("section")
         
-        # Excel file selection row
-        excel_btn_layout = QHBoxLayout()
-        self.browse_excel_btn = QPushButton("Select Store Order Excel File")
+        layout = QVBoxLayout(section)
+        layout.setSpacing(8)
+        
+        # Section title
+        title = QLabel("📊 Store Order Excel File")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Subtitle
+        
+        
+        
+        
+        # Button row
+        btn_layout = QHBoxLayout()
+        self.browse_excel_btn = QPushButton("Select Excel File")
         self.browse_excel_btn.clicked.connect(self.browse_excel_file)
         
         self.clear_excel_btn = QPushButton("Clear")
         self.clear_excel_btn.setObjectName("secondaryButton")
         self.clear_excel_btn.clicked.connect(self.clear_excel_file)
         
-        excel_btn_layout.addWidget(self.browse_excel_btn)
-        excel_btn_layout.addWidget(self.clear_excel_btn)
-        layout.addLayout(excel_btn_layout)
+        btn_layout.addWidget(self.browse_excel_btn)
+        btn_layout.addWidget(self.clear_excel_btn)
+        layout.addLayout(btn_layout)
         
-        # Excel file display
+        # Status display
         self.excel_file_label = QLabel("No Excel file selected")
         self.excel_file_label.setObjectName("infoText")
         self.excel_file_label.setWordWrap(True)
         layout.addWidget(self.excel_file_label)
+        
+        return section
+    
 
-        # Delivery date picker (for created_at override)
-        date_label = QLabel("Delivery Date (sets created_at for uploaded orders):")
-        date_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(date_label)
-
-        date_row = QHBoxLayout()
+    
+    def create_date_section(self):
+        """Create date picker section"""
+        section = QFrame()
+        section.setObjectName("section")
+        
+        layout = QVBoxLayout(section)
+        layout.setSpacing(8)
+        
+        # Section title
+        title = QLabel("📅 Order Picking Date")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Date picker
         self.delivery_date_edit = QDateEdit()
         self.delivery_date_edit.setCalendarPopup(True)
         self.delivery_date_edit.setDate(QDate.currentDate())
         self.delivery_date_edit.setDisplayFormat("yyyy-MM-dd")
-        date_row.addWidget(self.delivery_date_edit)
-        layout.addLayout(date_row)
-
-        # Additional Excel import subsection
-        add_excel_label = QLabel("Additional Order Excel Import (compare to initial)")
-        add_excel_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(add_excel_label)
-
-        add_excel_btn_layout = QHBoxLayout()
-        self.browse_additional_excel_btn = QPushButton("Select Additional Excel File")
-        self.browse_additional_excel_btn.clicked.connect(self.browse_additional_excel_file)
-
-        self.clear_additional_excel_btn = QPushButton("Clear")
-        self.clear_additional_excel_btn.setObjectName("secondaryButton")
-        self.clear_additional_excel_btn.clicked.connect(self.clear_additional_excel_file)
-
-        add_excel_btn_layout.addWidget(self.browse_additional_excel_btn)
-        add_excel_btn_layout.addWidget(self.clear_additional_excel_btn)
-        layout.addLayout(add_excel_btn_layout)
-
-        # Additional Excel file display
-        self.additional_excel_file_label = QLabel("No additional Excel file selected")
-        self.additional_excel_file_label.setObjectName("infoText")
-        self.additional_excel_file_label.setWordWrap(True)
-        layout.addWidget(self.additional_excel_file_label)
+        self.delivery_date_edit.setFixedHeight(35)
+        layout.addWidget(self.delivery_date_edit)
         
-        # PDF files subsection
-        pdf_label = QLabel("Picking Docket PDF Files:")
-        pdf_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(pdf_label)
+        return section
+    
+    def create_pdf_files_section(self):
+        """Create PDF files selection section"""
+        section = QFrame()
+        section.setObjectName("section")
+        
+        layout = QVBoxLayout(section)
+        layout.setSpacing(8)
+        
+        # Section title
+        title = QLabel("📄 PDF Files to Process")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
         
         # Button row
         btn_layout = QHBoxLayout()
-        add_picking_pdf_btn = QPushButton("Add Picking PDFs")
+        add_picking_pdf_btn = QPushButton("Add PDF Files")
         add_picking_pdf_btn.clicked.connect(self.browse_picking_pdf_files)
         
         clear_picking_pdf_btn = QPushButton("Clear")
@@ -707,34 +861,119 @@ class DispatchScanningApp(QMainWindow):
         
         # PDF list
         self.picking_pdf_list = QListWidget()
-        self.picking_pdf_list.setMaximumHeight(80)
+        self.picking_pdf_list.setMaximumHeight(120)
         layout.addWidget(self.picking_pdf_list)
-        
-        # Info
-        info_label = QLabel("Expected Excel columns:\n• Column A: Order Number (→ ordernumber)\n• Column B: Item Code (→ itemcode)\n• Column C: Product Description (→ product_description)\n• Column D: Barcode (→ barcode)\n• Column E: Customer Type (→ customer_type)\n• Column F: Quantity (→ quantity)")
-        info_label.setObjectName("infoText")
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-        
-        layout.addStretch()
         
         return section
     
-
+    def create_processing_column(self):
+        """Create right column with processing section"""
+        column = QFrame()
+        column.setObjectName("columnFrame")
+        
+        layout = QVBoxLayout(column)
+        layout.setSpacing(15)
+        
+        # Main processing section
+        processing_section = self.create_main_processing_section()
+        layout.addWidget(processing_section)
+        
+        # Workflow information section
+        workflow_section = self.create_workflow_info_section()
+        layout.addWidget(workflow_section)
+        
+        # Excel column requirements section
+        requirements_section = self.create_requirements_section()
+        layout.addWidget(requirements_section)
+        
+        layout.addStretch()
+        
+        return column
     
-    def create_output_section(self):
-        """Create output section"""
+    def create_main_processing_section(self):
+        """Create main processing section with action button"""
+        section = QFrame()
+        section.setObjectName("section")
+        
+        layout = QVBoxLayout(section)
+        layout.setSpacing(15)
+        
+        # Section title
+        title = QLabel("🚀 Process PDFs & Add Barcodes")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Process button
+        self.process_picking_btn = QPushButton("Process PDFs & Add Barcodes")
+        self.process_picking_btn.setObjectName("primaryButton")
+        self.process_picking_btn.clicked.connect(self.process_picking_dockets)
+        self.process_picking_btn.setFixedHeight(45)
+        layout.addWidget(self.process_picking_btn)
+        
+        return section
+    
+    def create_workflow_info_section(self):
+        """Create workflow information section"""
         section = QFrame()
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
         layout.setSpacing(10)
         
-       
+        # Section title
+        title = QLabel("📋 Workflow Overview")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
         
-       
+        # Workflow steps
+        workflow_text = QLabel("""
+        <b>This process will:</b>
+        <br>1. 📤 Upload store orders to dispatch_orders table (if selected)
+        <br>2. 🏷️ Generate barcodes for order numbers from Column A
+        <br>3. 📄 Scan PDF files for order numbers and add barcodes to matching pages
+        <br>4. 📅 Organize files in date-based folders
+        <br>5. 📊 Add barcodes to pages with matching order IDs (other pages remain unchanged)
+        """)
+        workflow_text.setObjectName("workflowText")
+        workflow_text.setWordWrap(True)
+        layout.addWidget(workflow_text)
         
         return section
+    
+    def create_requirements_section(self):
+        """Create Excel column requirements section"""
+        section = QFrame()
+        section.setObjectName("section")
+        
+        layout = QVBoxLayout(section)
+        layout.setSpacing(10)
+        
+        # Section title
+        title = QLabel("📊 Expected Excel Columns")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Requirements text
+        requirements_text = QLabel("""
+        <b>Required columns in your Excel file:</b>
+        <br>• Column A: Order Number (→ ordernumber)
+        <br>• Column B: Item Code (→ itemcode)
+        <br>• Column C: Product Description (→ product_description)
+        <br>• Column D: Barcode (→ barcode)
+        <br>• Column E: Customer Type (→ customer_type)
+        <br>• Column F: Quantity (→ quantity)
+        <br><br><b>Optional columns:</b>
+        <br>• Column G: Site Name (→ sitename)
+        <br>• Column H: Account Code (→ accountcode)
+        <br>• Column I: Dispatch Code (→ dispatchcode)
+        """)
+        requirements_text.setObjectName("requirementsText")
+        requirements_text.setWordWrap(True)
+        layout.addWidget(requirements_text)
+        
+        return section
+    
+
     
     # File handling methods
     def browse_picking_pdf_files(self):
@@ -772,23 +1011,45 @@ class DispatchScanningApp(QMainWindow):
             self.selected_excel_file = file_path
             try:
                 # Load Excel file and read column A
+                print(f"📋 Loading Excel file: {file_path}")
                 df = pd.read_excel(file_path)
+                
                 if df.empty or len(df.columns) == 0:
                     raise ValueError("Excel file is empty or has no columns")
+                
+                print(f"📋 Excel file loaded successfully:")
+                print(f"   - Total rows: {len(df)}")
+                print(f"   - Total columns: {len(df.columns)}")
+                print(f"   - Column names: {list(df.columns)}")
+                
+                # Show first few rows for debugging
+                print(f"📋 First 3 rows of data:")
+                for i, row in df.head(3).iterrows():
+                    print(f"   Row {i+1}: {dict(row)}")
                 
                 # Get column A values (first column)
                 column_a_values = df.iloc[:, 0].dropna().astype(str).tolist()
                 self.excel_order_numbers = [str(val).strip() for val in column_a_values if str(val).strip()]
+                
+                print(f"📋 Extracted {len(self.excel_order_numbers)} order numbers from Column A")
+                if self.excel_order_numbers:
+                    print(f"   First 5 order numbers: {self.excel_order_numbers[:5]}")
                 
                 filename = Path(file_path).name
                 self.excel_file_label.setText(f"Selected: {filename} ({len(self.excel_order_numbers)} order numbers)")
                 self.excel_file_label.setObjectName("successText")
                 self.update_status(f"Loaded {len(self.excel_order_numbers)} order numbers from Excel file")
                 
+                # Store the full DataFrame for later use in upload
+                self.excel_dataframe = df
+                
             except Exception as e:
+                print(f"❌ Error reading Excel file: {str(e)}")
+                print(f"❌ Error type: {type(e).__name__}")
                 QMessageBox.critical(self, "Excel File Error", f"Error reading Excel file: {str(e)}")
                 self.selected_excel_file = ""
                 self.excel_order_numbers = []
+                self.excel_dataframe = None
                 self.excel_file_label.setText("Error reading Excel file")
                 self.excel_file_label.setObjectName("warningText")
     
@@ -796,6 +1057,7 @@ class DispatchScanningApp(QMainWindow):
         """Clear selected Excel file"""
         self.selected_excel_file = ""
         self.excel_order_numbers = []
+        self.excel_dataframe = None
         self.excel_file_label.setText("No Excel file selected")
         self.excel_file_label.setObjectName("infoText")
         self.update_status("Excel file cleared")
@@ -828,6 +1090,8 @@ class DispatchScanningApp(QMainWindow):
         self.output_folder_label.setText("No output folder selected (will use default: picking_dockets_output)\nFiles will be saved in a date-based subfolder (YYYY-MM-DD)")
         self.output_folder_label.setObjectName("infoText")
         self.update_status("Output folder cleared - will use default location")
+
+
 
     # Additional Excel handling methods
     def browse_additional_excel_file(self):
@@ -970,14 +1234,16 @@ class DispatchScanningApp(QMainWindow):
     # Processing methods
     def process_picking_dockets(self):
         """Process picking dockets with reversed page order and upload Excel to database"""
-        # Check for Excel file with order numbers
-        if not self.selected_excel_file or not self.excel_order_numbers:
+        # Check for Excel file (store orders)
+        has_store_orders = self.selected_excel_file and self.excel_order_numbers
+        
+        if not has_store_orders:
             QMessageBox.warning(
                 self, 
                 "No Excel File", 
-                "Please select a store order Excel file first.\n\n"
-                "The application needs this to:\n"
-                "• Upload store orders to database in exact Excel row order\n"
+                "Please select a Store Order Excel File:\n\n"
+                "The application needs an Excel file to:\n"
+                "• Upload data to database in exact Excel row order\n"
                 "• Generate barcodes for order numbers in Column A\n"
                 "• Match picking dockets to order numbers"
             )
@@ -1048,65 +1314,67 @@ class DispatchScanningApp(QMainWindow):
         try:
             # STEP 1: Upload to Supabase
             if SUPABASE_AVAILABLE:
-                # If user selected an additional file, ONLY upload new rows from it
-                if getattr(self, 'selected_additional_excel_file', ""):
-                    try:
-                        add_name = Path(self.selected_additional_excel_file).name
-                        # Ensure we have computed diffs; if not, compute now
-                        if not getattr(self, 'additional_new_rows_data', None):
-                            new_rows_now = self.compute_new_rows_between_excels(self.selected_excel_file, self.selected_additional_excel_file)
-                            self.additional_new_rows_data = new_rows_now
-                            self.additional_new_rows_count = len(new_rows_now)
+                # Upload Store Orders (if selected)
+                if getattr(self, 'selected_excel_file', ""):
+                    # If user selected an additional file, ONLY upload new rows from it
+                    if getattr(self, 'selected_additional_excel_file', ""):
+                        try:
+                            add_name = Path(self.selected_additional_excel_file).name
+                            # Ensure we have computed diffs; if not, compute now
+                            if not getattr(self, 'additional_new_rows_data', None):
+                                new_rows_now = self.compute_new_rows_between_excels(self.selected_excel_file, self.selected_additional_excel_file)
+                                self.additional_new_rows_data = new_rows_now
+                                self.additional_new_rows_count = len(new_rows_now)
 
-                        count = len(self.additional_new_rows_data or [])
-                        if count > 0:
-                            # Build created_at from date picker (use start of day in ISO format)
-                            date_q = self.delivery_date_edit.date()
-                            created_at_iso = f"{date_q.toString('yyyy-MM-dd')}T00:00:00+00:00"
-                            self.processing_thread.progress_signal.emit(
-                                f"📤 Uploading {count} NEW rows from additional file {add_name} to database..."
-                            )
-                            add_success = upload_store_orders_from_excel(self.additional_new_rows_data, add_name, created_at_override=created_at_iso)
-                            if add_success:
+                            count = len(self.additional_new_rows_data or [])
+                            if count > 0:
+                                # Build created_at from date picker (use start of day in ISO format)
+                                date_q = self.delivery_date_edit.date()
+                                created_at_iso = f"{date_q.toString('yyyy-MM-dd')}T00:00:00+00:00"
                                 self.processing_thread.progress_signal.emit(
-                                    f"✅ Successfully uploaded {count} new rows from {add_name}"
+                                    f"📤 Uploading {count} NEW rows from additional file {add_name} to database..."
                                 )
+                                add_success = upload_store_orders_from_excel(self.additional_new_rows_data, add_name, created_at_override=created_at_iso)
+                                if add_success:
+                                    self.processing_thread.progress_signal.emit(
+                                        f"✅ Successfully uploaded {count} new rows from {add_name}"
+                                    )
+                                else:
+                                    self.processing_thread.progress_signal.emit(
+                                        f"⚠️ Failed to upload new rows from {add_name}"
+                                    )
                             else:
                                 self.processing_thread.progress_signal.emit(
-                                    f"⚠️ Failed to upload new rows from {add_name}"
+                                    f"ℹ️ No new rows detected in additional file {add_name} — nothing to upload"
                                 )
-                        else:
+                        except Exception as e:
                             self.processing_thread.progress_signal.emit(
-                                f"ℹ️ No new rows detected in additional file {add_name} — nothing to upload"
+                                f"⚠️ Error uploading additional Excel new rows: {str(e)}"
                             )
-                    except Exception as e:
-                        self.processing_thread.progress_signal.emit(
-                            f"⚠️ Error uploading additional Excel new rows: {str(e)}"
-                        )
-                else:
-                    # No additional file selected — upload the full initial Excel file
-                    self.processing_thread.progress_signal.emit("📤 Uploading store order Excel file to database...")
-                    try:
-                        # Read Excel file maintaining row order
-                        self.processing_thread.progress_signal.emit(f"Reading {Path(self.selected_excel_file).name} and preserving Excel row order...")
-                        df = pd.read_excel(self.selected_excel_file)
-                        
-                        # Convert DataFrame to list of dictionaries (preserves row order)
-                        store_order_data = df.to_dict('records')
-                        
-                        self.processing_thread.progress_signal.emit(f"Uploading {len(store_order_data)} rows to dispatch_orders table in picking sequence order...")
-                        
-                        # Upload to Supabase using the function (order-preserving)
-                        date_q = self.delivery_date_edit.date()
-                        created_at_iso = f"{date_q.toString('yyyy-MM-dd')}T00:00:00+00:00"
-                        success = upload_store_orders_from_excel(store_order_data, Path(self.selected_excel_file).name, created_at_override=created_at_iso)
-                        
-                        if success:
-                            self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {Path(self.selected_excel_file).name} to database with Excel order preserved!")
-                        else:
-                            self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload {Path(self.selected_excel_file).name} to database - continuing with picking docket processing")
-                    except Exception as e:
-                        self.processing_thread.progress_signal.emit(f"⚠️ Error uploading Excel file to database: {str(e)} - continuing with picking docket processing")
+                    else:
+                        # No additional file selected — upload the full initial Excel file
+                        self.processing_thread.progress_signal.emit("📤 Uploading store order Excel file to database...")
+                        try:
+                            # Read Excel file maintaining row order
+                            self.processing_thread.progress_signal.emit(f"Reading {Path(self.selected_excel_file).name} and preserving Excel row order...")
+                            df = pd.read_excel(self.selected_excel_file)
+                            
+                            # Convert DataFrame to list of dictionaries (preserves row order)
+                            store_order_data = df.to_dict('records')
+                            
+                            self.processing_thread.progress_signal.emit(f"Uploading {len(store_order_data)} rows to dispatch_orders table in picking sequence order...")
+                            
+                            # Upload to Supabase using the function (order-preserving)
+                            date_q = self.delivery_date_edit.date()
+                            created_at_iso = f"{date_q.toString('yyyy-MM-dd')}T00:00:00+00:00"
+                            success = upload_store_orders_from_excel(store_order_data, Path(self.selected_excel_file).name, created_at_override=created_at_iso)
+                            
+                            if success:
+                                self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {Path(self.selected_excel_file).name} to database with Excel order preserved!")
+                            else:
+                                self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload {Path(self.selected_excel_file).name} to database - continuing with picking docket processing")
+                        except Exception as e:
+                            self.processing_thread.progress_signal.emit(f"⚠️ Error uploading Excel file to database: {str(e)} - continuing with picking docket processing")
             else:
                 self.processing_thread.progress_signal.emit("⚠️ Supabase not available - skipping database upload")
             
@@ -1127,24 +1395,68 @@ class DispatchScanningApp(QMainWindow):
             processed_files = 0
             total_pages_processed = 0
             
+            # Track which order numbers were found in PDF files
+            order_numbers_found_in_pdfs = set()
+            
             # Dictionary to store generated barcodes for each order ID
             order_barcodes = {}
             
+            # Tracking for barcode generation status
+            barcode_generation_status = {}
+            barcode_generation_errors = {}
+            
+            # Generate barcodes for Excel order numbers
+            unique_order_numbers = self.excel_order_numbers.copy()
+            
+            # Check if we have order numbers to process
+            if not unique_order_numbers:
+                self.processing_thread.progress_signal.emit("❌ No order numbers found in Excel file!")
+                self.processing_thread.progress_signal.emit("Please make sure your Excel file has order numbers in Column A")
+                return {
+                    "processed_files": 0,
+                    "total_pages": 0,
+                    "driver_files_created": 0,
+                    "created_files": [],
+                    "failed_files": [],
+                    "driver_details": {},
+                    "output_dir": str(output_dir),
+                    "barcodes_generated": 0,
+                    "error": "No order numbers found in Excel file"
+                }
+            
             self.processing_thread.progress_signal.emit("Starting picking dockets processing...")
-            self.processing_thread.progress_signal.emit(f"Processing {len(self.selected_picking_pdf_files)} picking docket PDF files...")
-            self.processing_thread.progress_signal.emit(f"Looking for {len(self.excel_order_numbers)} order numbers from Excel file...")
+            self.processing_thread.progress_signal.emit(f"Processing {len(self.selected_picking_pdf_files)} PDF files...")
+            self.processing_thread.progress_signal.emit(f"Looking for {len(unique_order_numbers)} unique order numbers from Excel file...")
             
             # Debug: Show loaded Excel order numbers
-            self.processing_thread.progress_signal.emit(f"Excel order numbers to find: {len(self.excel_order_numbers)}")
-            for i, order_num in enumerate(self.excel_order_numbers[:5]):  # Show first 5
+            self.processing_thread.progress_signal.emit(f"Unique order numbers to find: {len(unique_order_numbers)}")
+            for i, order_num in enumerate(unique_order_numbers[:5]):  # Show first 5
                 self.processing_thread.progress_signal.emit(f"  {i+1}. '{order_num}'")
-            if len(self.excel_order_numbers) > 5:
-                self.processing_thread.progress_signal.emit(f"  ... and {len(self.excel_order_numbers) - 5} more order numbers")
+            if len(unique_order_numbers) > 5:
+                self.processing_thread.progress_signal.emit(f"  ... and {len(unique_order_numbers) - 5} more order numbers")
             
-            # First, generate barcodes for all Excel order numbers
-            self.processing_thread.progress_signal.emit("Generating barcodes for Excel order numbers...")
-            for order_id in self.excel_order_numbers:
+            self.processing_thread.progress_signal.emit(f"Generating barcodes for {len(unique_order_numbers)} unique order numbers...")
+            for order_id in unique_order_numbers:
                 try:
+                    # Validate order ID for barcode generation
+                    if not order_id or not order_id.strip():
+                        error_msg = "Empty or whitespace-only order number"
+                        barcode_generation_errors[order_id] = error_msg
+                        self.processing_thread.progress_signal.emit(f"❌ Skipped barcode generation for '{order_id}': {error_msg}")
+                        continue
+                    
+                    # Check for invalid characters in Code128
+                    invalid_chars = []
+                    for char in order_id:
+                        if ord(char) < 32 or ord(char) > 126:  # Code128 supports ASCII 32-126
+                            invalid_chars.append(char)
+                    
+                    if invalid_chars:
+                        error_msg = f"Invalid characters for Code128 barcode: {invalid_chars}"
+                        barcode_generation_errors[order_id] = error_msg
+                        self.processing_thread.progress_signal.emit(f"❌ Skipped barcode generation for '{order_id}': {error_msg}")
+                        continue
+                    
                     # Create barcode using Code128
                     code128 = Code128(order_id, writer=ImageWriter())
                     
@@ -1155,11 +1467,14 @@ class DispatchScanningApp(QMainWindow):
                     
                     # Store the barcode image data
                     order_barcodes[order_id] = barcode_buffer.getvalue()
+                    barcode_generation_status[order_id] = "Generated"
                     
-                    self.processing_thread.progress_signal.emit(f"Generated barcode for Order ID: {order_id}")
+                    self.processing_thread.progress_signal.emit(f"✅ Generated barcode for Order ID: {order_id}")
                     
                 except Exception as e:
-                    self.processing_thread.progress_signal.emit(f"Error generating barcode for {order_id}: {str(e)}")
+                    error_msg = f"Barcode generation failed: {str(e)}"
+                    barcode_generation_errors[order_id] = error_msg
+                    self.processing_thread.progress_signal.emit(f"❌ Error generating barcode for '{order_id}': {error_msg}")
                     continue
             
             # Process picking docket PDF files
@@ -1196,11 +1511,11 @@ class DispatchScanningApp(QMainWindow):
                                 )
                                 page_text = ""
                         
-                        # Search for exact order ID matches from Excel data
+                        # Search for exact order ID matches from Excel data (both files)
                         matched_order_id = None
                         
                         # Search for each order ID from Excel data directly in the PDF text
-                        for excel_order_id in self.excel_order_numbers:
+                        for excel_order_id in unique_order_numbers:
                             # Case-insensitive search for the exact order ID
                             if excel_order_id.upper() in page_text.upper():
                                 matched_order_id = excel_order_id  # Use the exact case from Excel
@@ -1211,7 +1526,7 @@ class DispatchScanningApp(QMainWindow):
                         
                         # If no exact match found, try word boundary search for more precision
                         if not matched_order_id:
-                            for excel_order_id in self.excel_order_numbers:
+                            for excel_order_id in unique_order_numbers:
                                 # Use word boundaries to avoid partial matches
                                 pattern = r'\b' + re.escape(excel_order_id) + r'\b'
                                 if re.search(pattern, page_text, re.IGNORECASE):
@@ -1226,6 +1541,9 @@ class DispatchScanningApp(QMainWindow):
                             self.processing_thread.progress_signal.emit(
                                 f"Found Order ID '{matched_order_id}' on page {page_num + 1} of {Path(pdf_file).name}"
                             )
+                            
+                            # Track that this order number was found in PDFs
+                            order_numbers_found_in_pdfs.add(matched_order_id)
                             
                             # Initialize order group if not exists
                             if matched_order_id not in order_pages:
@@ -1260,6 +1578,47 @@ class DispatchScanningApp(QMainWindow):
                     if 'pdf_document' in locals():
                         pdf_document.close()
                     continue
+            
+            # Summary of what was found
+            total_matched_pages = sum(len(pages) for pages in order_pages.values())
+            self.processing_thread.progress_signal.emit(f"📊 PDF Processing Summary:")
+            self.processing_thread.progress_signal.emit(f"   - Processed {processed_files} PDF files")
+            self.processing_thread.progress_signal.emit(f"   - Scanned {total_pages_processed} total pages")
+            self.processing_thread.progress_signal.emit(f"   - Found {total_matched_pages} pages with matching order numbers")
+            self.processing_thread.progress_signal.emit(f"   - Matched {len(order_pages)} different order numbers")
+            
+            # Comprehensive barcode and order number status reporting
+            self.processing_thread.progress_signal.emit("📊 Barcode Generation and Order Number Status Report:")
+            
+            # Report barcode generation status
+            successful_barcodes = len(order_barcodes)
+            failed_barcodes = len(barcode_generation_errors)
+            self.processing_thread.progress_signal.emit(f"   Barcode Generation: {successful_barcodes} successful, {failed_barcodes} failed")
+            
+            # Report order number matching status
+            found_in_pdfs = len(order_numbers_found_in_pdfs)
+            not_found_in_pdfs = len(unique_order_numbers) - found_in_pdfs
+            self.processing_thread.progress_signal.emit(f"   Order Number Matching: {found_in_pdfs} found in PDFs, {not_found_in_pdfs} not found")
+            
+            # Report detailed failures
+            if barcode_generation_errors:
+                self.processing_thread.progress_signal.emit("   ❌ Barcode Generation Failures:")
+                for order_id, error in barcode_generation_errors.items():
+                    self.processing_thread.progress_signal.emit(f"      - '{order_id}': {error}")
+            
+            # Report order numbers not found in PDFs
+            order_numbers_not_found = set(unique_order_numbers) - order_numbers_found_in_pdfs
+            if order_numbers_not_found:
+                self.processing_thread.progress_signal.emit("   ❌ Order Numbers Not Found in PDF Files:")
+                for order_id in sorted(order_numbers_not_found):
+                    self.processing_thread.progress_signal.emit(f"      - '{order_id}': No matching pages found in any PDF file")
+            
+            if not order_pages:
+                self.processing_thread.progress_signal.emit("⚠️ No matching order numbers found in any PDF files!")
+                self.processing_thread.progress_signal.emit("This could mean:")
+                self.processing_thread.progress_signal.emit("   - Order numbers in PDFs don't match Excel file")
+                self.processing_thread.progress_signal.emit("   - PDFs contain images that need OCR")
+                self.processing_thread.progress_signal.emit("   - Text extraction failed from PDF pages")
             
             # Save generated barcodes to Supabase if available
             if SUPABASE_AVAILABLE:
@@ -1297,13 +1656,13 @@ class DispatchScanningApp(QMainWindow):
             else:
                 self.processing_thread.progress_signal.emit("⚠️ Supabase not available - barcodes not saved to database")
             
-            # Create separate PDF files for each order number with barcodes
-            self.processing_thread.progress_signal.emit("Creating order-specific PDF files with barcodes...")
+            # Modify original PDF files by adding barcodes to pages with matching order numbers
+            self.processing_thread.progress_signal.emit("Adding barcodes to PDF pages with matching order numbers...")
             
             # Show summary of what was found
             total_matched_pages = sum(len(pages) for pages in order_pages.values())
-            self.processing_thread.progress_signal.emit(f"Found {total_matched_pages} picking docket pages with matching Order IDs across {len(order_pages)} orders")
-            self.processing_thread.progress_signal.emit("📋 Only including pages with order IDs from Excel file - other pages are filtered out")
+            self.processing_thread.progress_signal.emit(f"Found {total_matched_pages} pages with matching Order IDs across {len(order_pages)} orders")
+            self.processing_thread.progress_signal.emit("📋 Adding barcodes to pages with order IDs from Excel file")
             
             created_files = []
             failed_files = []
@@ -1323,34 +1682,38 @@ class DispatchScanningApp(QMainWindow):
                     "error": "No matching orders found in picking docket PDF files"
                 }
             
+            # Group pages by source PDF file for processing
+            pdf_files_to_modify = {}
             for order_id, pages in order_pages.items():
-                if not pages:
-                    continue
-                
+                for page_info in pages:
+                    pdf_path = page_info['source_pdf_path']
+                    if pdf_path not in pdf_files_to_modify:
+                        pdf_files_to_modify[pdf_path] = []
+                    pdf_files_to_modify[pdf_path].append({
+                        'page_num': page_info['page_num'],
+                        'order_id': order_id
+                    })
+            
+            # Process each PDF file and add barcodes to matching pages
+            for pdf_file, pages_to_modify in pdf_files_to_modify.items():
                 try:
-                    # Create new PDF for this order
-                    output_filename = f"Order_{order_id}_Combined.pdf"
-                    output_path = output_dir / output_filename
+                    pdf_filename = Path(pdf_file).name
+                    self.processing_thread.progress_signal.emit(f"Processing {pdf_filename} - adding barcodes to {len(pages_to_modify)} pages...")
                     
-                    self.processing_thread.progress_signal.emit(
-                        f"Creating {output_filename} with {len(pages)} pages and barcode..."
-                    )
+                    # Open the original PDF
+                    pdf_document = fitz.open(pdf_file)
                     
-                    new_pdf = fitz.open()
-                    pages_added = 0
+                    # Sort pages by page number to process in order
+                    pages_to_modify.sort(key=lambda x: x['page_num'])
                     
-                    # Add all pages for this order with barcodes
-                    for page_info in pages:
+                    # Add barcodes to each matching page
+                    for page_info in pages_to_modify:
+                        page_num = page_info['page_num']
+                        order_id = page_info['order_id']
+                        
                         try:
-                            # Open source PDF and get the page
-                            source_pdf = fitz.open(page_info['source_pdf_path'])
-                            source_page = source_pdf[page_info['page_num']]
-                            
-                            # Create a new page in the output PDF
-                            new_page = new_pdf.new_page(width=source_page.rect.width, height=source_page.rect.height)
-                            
-                            # Copy the original page content
-                            new_page.show_pdf_page(new_page.rect, source_pdf, page_info['page_num'])
+                            # Get the page
+                            page = pdf_document[page_num]
                             
                             # Add barcode at the top center of the page
                             if order_id in order_barcodes:
@@ -1359,7 +1722,7 @@ class DispatchScanningApp(QMainWindow):
                                     barcode_data = order_barcodes[order_id]
                                     
                                     # Calculate position for top center
-                                    page_width = new_page.rect.width
+                                    page_width = page.rect.width
                                     barcode_width = 700  # Long barcode
                                     barcode_height = 70  # Shorter barcode
                                     
@@ -1368,64 +1731,60 @@ class DispatchScanningApp(QMainWindow):
                                     
                                     # Insert barcode image
                                     barcode_rect = fitz.Rect(barcode_x, barcode_y, barcode_x + barcode_width, barcode_y + barcode_height)
-                                    new_page.insert_image(barcode_rect, stream=barcode_data)
+                                    page.insert_image(barcode_rect, stream=barcode_data)
                                     
                                     self.processing_thread.progress_signal.emit(
-                                        f"Added barcode for Order {order_id} to page {pages_added + 1}"
+                                        f"Added barcode for Order {order_id} to page {page_num + 1} in {pdf_filename}"
                                     )
                                     
                                 except Exception as barcode_error:
                                     self.processing_thread.progress_signal.emit(
-                                        f"Error adding barcode to page for Order {order_id}: {str(barcode_error)}"
+                                        f"Error adding barcode to page {page_num + 1} for Order {order_id}: {str(barcode_error)}"
                                     )
-                            
-                            source_pdf.close()
-                            pages_added += 1
                             
                         except Exception as e:
                             self.processing_thread.progress_signal.emit(
-                                f"Error processing page for Order {page_info['order_id']}: {str(e)}"
+                                f"Error processing page {page_num + 1} for Order {order_id}: {str(e)}"
                             )
                             continue
                     
-                    # Only save if we successfully added pages
-                    if pages_added > 0:
-                        new_pdf.save(str(output_path))
-                        new_pdf.close()
-                        
-                        # Verify the file was created
-                        if output_path.exists():
-                            created_files.append(output_filename)
-                            self.processing_thread.progress_signal.emit(
-                                f"✓ Successfully created {output_filename} with {pages_added} pages and barcode"
-                            )
-                        else:
-                            failed_files.append(output_filename)
-                            self.processing_thread.progress_signal.emit(
-                                f"✗ Failed to create {output_filename} - file not found after save"
-                            )
+                    # Save the modified PDF to output directory
+                    output_filename = f"Barcoded_{pdf_filename}"
+                    output_path = output_dir / output_filename
+                    
+                    pdf_document.save(str(output_path))
+                    pdf_document.close()
+                    
+                    # Verify the file was created
+                    if output_path.exists():
+                        created_files.append(output_filename)
+                        self.processing_thread.progress_signal.emit(
+                            f"✓ Successfully created {output_filename} with barcodes added"
+                        )
                     else:
-                        new_pdf.close()
                         failed_files.append(output_filename)
                         self.processing_thread.progress_signal.emit(
-                            f"✗ No pages added to {output_filename}"
+                            f"✗ Failed to create {output_filename} - file not found after save"
                         )
                         
                 except Exception as e:
-                    failed_files.append(f"Order_{order_id}_Combined.pdf")
+                    failed_files.append(f"Barcoded_{Path(pdf_file).name}")
                     self.processing_thread.progress_signal.emit(
-                        f"✗ Error creating PDF for Order {order_id}: {str(e)}"
+                        f"✗ Error processing PDF {Path(pdf_file).name}: {str(e)}"
                     )
+                    if 'pdf_document' in locals():
+                        pdf_document.close()
                     continue
             
             # Final summary message
             self.processing_thread.progress_signal.emit("Processing complete!")
             if SUPABASE_AVAILABLE:
-                self.processing_thread.progress_signal.emit(f"📤 Uploaded Excel file to dispatch_orders database table with Excel row order preserved")
-            self.processing_thread.progress_signal.emit(f"Created {len(created_files)} order-specific PDF files in {output_dir}")
+                if getattr(self, 'selected_excel_file', ""):
+                    self.processing_thread.progress_signal.emit(f"📤 Uploaded store orders to dispatch_orders table")
+            self.processing_thread.progress_signal.emit(f"Created {len(created_files)} barcoded PDF files in {output_dir}")
             self.processing_thread.progress_signal.emit(f"📅 Files saved in date folder: {current_date}")
-            self.processing_thread.progress_signal.emit(f"🏷️  Generated barcodes for {len(order_barcodes)} order numbers from Excel file")
-            self.processing_thread.progress_signal.emit("📋 Only pages with order IDs matching Excel file were included - others were filtered out")
+            self.processing_thread.progress_signal.emit(f"🏷️  Generated barcodes for {len(order_barcodes)} unique order numbers from Excel files")
+            self.processing_thread.progress_signal.emit("📋 Added barcodes to pages with order IDs matching Excel file - other pages remain unchanged")
             
             # Generate summary report
             summary_path = output_dir / "picking_dockets_summary.txt"
@@ -1434,22 +1793,50 @@ class DispatchScanningApp(QMainWindow):
                 f.write("=" * 50 + "\n\n")
                 f.write(f"Processing Date: {current_date}\n")
                 f.write(f"Output Directory: {output_dir}\n")
-                f.write(f"Excel file used: {Path(self.selected_excel_file).name}\n")
+                if getattr(self, 'selected_excel_file', ""):
+                    f.write(f"Store Orders Excel file: {Path(self.selected_excel_file).name}\n")
                 f.write(f"Database upload: {'✅ Success' if SUPABASE_AVAILABLE else '❌ Supabase not available'}\n")
-                f.write(f"Order numbers from Excel: {len(self.excel_order_numbers)}\n")
+                f.write(f"Unique order numbers from Excel files: {len(unique_order_numbers)}\n")
                 f.write(f"Total picking docket PDF files processed: {processed_files}\n")
                 f.write(f"Total pages scanned: {total_pages_processed}\n")
-                f.write(f"Order-specific PDF files created: {len(created_files)}\n")
+                f.write(f"Barcoded PDF files created: {len(created_files)}\n")
                 f.write(f"Barcodes generated: {len(order_barcodes)}\n")
+                f.write(f"Barcode generation failures: {len(barcode_generation_errors)}\n")
+                f.write(f"Order numbers found in PDFs: {len(order_numbers_found_in_pdfs)}\n")
+                f.write(f"Order numbers not found in PDFs: {len(set(unique_order_numbers) - order_numbers_found_in_pdfs)}\n")
                 if failed_files:
                     f.write(f"Failed PDF files: {len(failed_files)}\n")
                 f.write("\n")
+                
+                # Detailed barcode generation report
+                f.write("Barcode Generation Details:\n")
+                f.write("-" * 30 + "\n")
+                if barcode_generation_errors:
+                    f.write("Failed Barcode Generation:\n")
+                    for order_id, error in barcode_generation_errors.items():
+                        f.write(f"  - '{order_id}': {error}\n")
+                    f.write("\n")
+                
+                # Order number matching report
+                order_numbers_not_found = set(unique_order_numbers) - order_numbers_found_in_pdfs
+                if order_numbers_not_found:
+                    f.write("Order Numbers Not Found in PDF Files:\n")
+                    for order_id in sorted(order_numbers_not_found):
+                        f.write(f"  - '{order_id}': No matching pages found in any PDF file\n")
+                    f.write("\n")
+                
+                f.write("Order Numbers Successfully Processed:\n")
+                for order_id in sorted(order_numbers_found_in_pdfs):
+                    page_count = len(order_pages.get(order_id, []))
+                    f.write(f"  - '{order_id}': {page_count} pages found and barcoded\n")
+                f.write("\n")
                 f.write("WORKFLOW COMPLETED:\n")
-                f.write(f"1. 📤 Uploaded Excel file to dispatch_orders database table (Excel row order preserved)\n")
-                f.write(f"2. 🏷️  Generated barcodes for {len(order_barcodes)} order numbers from Excel Column A\n")
-                f.write(f"3. 📄 Created {len(created_files)} order-specific picking docket PDFs with barcodes\n")
+                if getattr(self, 'selected_excel_file', ""):
+                    f.write(f"1. 📤 Uploaded store orders to dispatch_orders table (Excel row order preserved)\n")
+                f.write(f"2. 🏷️  Generated barcodes for {len(order_barcodes)} unique order numbers from Excel files\n")
+                f.write(f"3. 📄 Added barcodes to pages in original PDF files where order numbers were found\n")
                 f.write(f"4. 📅 Organized all files in date folder: {current_date}\n\n")
-                f.write("Each PDF contains all pages for a specific order number with barcodes at the top.\n")
+                f.write("Each modified PDF contains the original pages with barcodes added at the top where order numbers were found.\n")
                 f.write("Barcodes are generated for order numbers found in Excel Column A.\n\n")
                 
                 if created_files:
@@ -1469,7 +1856,7 @@ class DispatchScanningApp(QMainWindow):
                     f.write(f"  Order {order_id}: {len(pages)} pages\n")
                 
                 f.write("\nExcel Order Numbers:\n")
-                for order_id in sorted(self.excel_order_numbers):
+                for order_id in sorted(unique_order_numbers):
                     found_pages = len(order_pages.get(order_id, []))
                     f.write(f"  - {order_id} ({found_pages} pages found)\n")
             
@@ -1490,6 +1877,9 @@ class DispatchScanningApp(QMainWindow):
                 "driver_details": order_details,  # Use order details instead of driver details
                 "output_dir": str(output_dir),
                 "barcodes_generated": len(order_barcodes),
+                "barcode_generation_errors": barcode_generation_errors,
+                "order_numbers_found_in_pdfs": list(order_numbers_found_in_pdfs),
+                "order_numbers_not_found": list(set(unique_order_numbers) - order_numbers_found_in_pdfs),
                 "database_upload": SUPABASE_AVAILABLE,
                 "excel_file": Path(self.selected_excel_file).name if self.selected_excel_file else "None",
                 "additional_file": Path(self.selected_additional_excel_file).name if getattr(self, 'selected_additional_excel_file', "") else "",
@@ -1538,11 +1928,16 @@ class DispatchScanningApp(QMainWindow):
                 font-size: 13px;
             }
             
+            QFrame#columnFrame {
+                background-color: transparent;
+            }
+            
             QFrame#section {
                 background-color: white;
                 border: 1px solid #e2e8f0;
-                border-radius: 6px;
-                padding: 12px;
+                border-radius: 8px;
+                padding: 16px;
+                margin-bottom: 5px;
             }
             
             QLabel {
@@ -1552,16 +1947,36 @@ class DispatchScanningApp(QMainWindow):
             
             QLabel#sectionTitle {
                 color: #1e293b;
-                font-size: 14px;
+                font-size: 15px;
                 font-weight: bold;
-                margin-bottom: 3px;
+                margin-bottom: 5px;
             }
             
-            QLabel#workflowInfo {
+            QLabel#sectionSubtitle {
                 color: #6b7280;
-                font-size: 11px;
+                font-size: 12px;
                 font-style: italic;
-                margin-bottom: 10px;
+                margin-bottom: 8px;
+            }
+            
+            QLabel#workflowText {
+                color: #374151;
+                font-size: 13px;
+                line-height: 1.4;
+                padding: 8px;
+                background-color: #f8fafc;
+                border-radius: 6px;
+                border-left: 4px solid #2563eb;
+            }
+            
+            QLabel#requirementsText {
+                color: #374151;
+                font-size: 12px;
+                line-height: 1.4;
+                padding: 8px;
+                background-color: #f8fafc;
+                border-radius: 6px;
+                border-left: 4px solid #10b981;
             }
             
             QLabel#infoText {
@@ -1594,11 +2009,10 @@ class DispatchScanningApp(QMainWindow):
                 background-color: #e2e8f0;
                 color: #374151;
                 border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
+                padding: 8px 16px;
+                border-radius: 6px;
                 font-weight: 500;
-                min-height: 16px;
-                max-width: 200px;
+                min-height: 20px;
                 font-size: 12px;
             }
             
@@ -1609,10 +2023,20 @@ class DispatchScanningApp(QMainWindow):
             QPushButton#primaryButton {
                 background-color: #2563eb;
                 color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 14px;
+                min-height: 45px;
             }
             
             QPushButton#primaryButton:hover {
                 background-color: #1d4ed8;
+            }
+            
+            QPushButton#primaryButton:pressed {
+                background-color: #1e40af;
             }
             
             QPushButton#secondaryButton {
@@ -1624,17 +2048,18 @@ class DispatchScanningApp(QMainWindow):
                 background-color: #4b5563;
             }
             
-            QLineEdit {
+            QLineEdit, QDateEdit {
                 border: 1px solid #d1d5db;
-                border-radius: 4px;
-                padding: 6px 10px;
+                border-radius: 6px;
+                padding: 8px 12px;
                 background-color: white;
                 color: #374151;
                 font-size: 12px;
             }
             
-            QLineEdit:focus {
+            QLineEdit:focus, QDateEdit:focus {
                 border-color: #2563eb;
+                outline: none;
             }
             
             QListWidget, QTableWidget {

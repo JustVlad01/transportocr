@@ -1682,7 +1682,7 @@ class TransportSorterApp(QMainWindow):
             return
         
         try:
-            from excel_upload_example import upload_excel_pick_list
+            from supabase_config import upload_pick_list_from_excel
             
             self.update_status("Uploading Excel files to Supabase...")
             
@@ -1691,7 +1691,11 @@ class TransportSorterApp(QMainWindow):
             
             for file_path in self.selected_excel_files:
                 try:
-                    success = upload_excel_pick_list(file_path)
+                    # Read Excel file
+                    df = pd.read_excel(file_path)
+                    excel_data = df.to_dict('records')
+                    
+                    success = upload_pick_list_from_excel(excel_data, Path(file_path).name)
                     if success:
                         success_count += 1
                         self.update_status(f"Uploaded {Path(file_path).name} successfully...")
@@ -1722,7 +1726,7 @@ class TransportSorterApp(QMainWindow):
                 self, 
                 "Missing Dependencies", 
                 "Required Supabase dependencies not found.\n\n"
-                "Please ensure supabase_config.py and excel_upload_example.py are in the project directory."
+                "Please ensure supabase_config.py is in the project directory."
             )
         except Exception as e:
             QMessageBox.critical(self, "Upload Error", f"Error uploading Excel files: {str(e)}")
