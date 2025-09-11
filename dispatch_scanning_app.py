@@ -7,6 +7,31 @@ import fitz  # PyMuPDF
 import pytesseract
 from PIL import Image
 import io
+import re
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+
+# Configure Tesseract path for Windows
+try:
+    # Try common Windows installation paths
+    possible_paths = [
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+        r'C:\Users\{}\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'.format(os.getenv('USERNAME', '')),
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            break
+    else:
+        # If not found in common paths, try to find it in PATH
+        import shutil
+        tesseract_path = shutil.which('tesseract')
+        if tesseract_path:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
+except Exception as e:
+    print(f"Warning: Could not configure Tesseract path: {e}")
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
@@ -22,10 +47,12 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QProgressBar, QStatusBar, QFrame,
     QScrollArea, QGroupBox, QSplitter, QComboBox, QDialog, 
     QDialogButtonBox, QListWidget, QTableWidget, QTableWidgetItem,
-    QHeaderView, QPlainTextEdit, QCheckBox, QTabWidget, QDateEdit
+    QHeaderView, QPlainTextEdit, QCheckBox, QTabWidget, QDateEdit,
+    QStyledItemDelegate, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
+    QGraphicsRectItem
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QDate
-from PySide6.QtGui import QFont, QPalette, QColor, QIcon, QPixmap
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QDate, QRectF, QPointF
+from PySide6.QtGui import QFont, QPalette, QColor, QIcon, QPixmap, QPen, QBrush, QPainter
 
 # Import Supabase configuration
 try:
@@ -52,6 +79,9 @@ class ProcessingThread(QThread):
         except Exception as e:
             self.progress_signal.emit(f"Error: {str(e)}")
             self.finished_signal.emit(False, {"error": str(e)})
+
+
+
 
 
 class ProcessingResultsDialog(QDialog):
@@ -133,14 +163,6 @@ class ProcessingResultsDialog(QDialog):
             files_tab = self.create_files_tab(results.get('created_files', []))
             tab_widget.addTab(files_tab, "Created Files")
         
-        # Tab 2: Newly Added Rows (if any)
-        if results.get('additional_new_rows_count', 0) > 0:
-            added_tab = self.create_added_rows_tab(
-                results.get('additional_file', ''),
-                results.get('additional_new_rows_count', 0),
-                results.get('additional_new_rows', [])
-            )
-            tab_widget.addTab(added_tab, "New Rows (Additional)")
 
         # Next: Driver Details
         if results.get('driver_details'):
@@ -230,47 +252,6 @@ class ProcessingResultsDialog(QDialog):
         
         return widget
 
-    def create_added_rows_tab(self, additional_filename: str, count: int, rows: list):
-        """Create a tab showing newly added rows from the additional Excel file"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        header = QLabel(
-            f"Additional file: {additional_filename} — {count} new row(s) detected and uploaded"
-        )
-        header.setObjectName("infoText")
-        header.setWordWrap(True)
-        layout.addWidget(header)
-
-        if not rows:
-            empty = QLabel("No new rows")
-            layout.addWidget(empty)
-            return widget
-
-        # Build a table from the row dicts using union of keys
-        columns = []
-        for r in rows:
-            for k in r.keys():
-                if k not in columns:
-                    columns.append(k)
-
-        table = QTableWidget()
-        table.setColumnCount(len(columns))
-        table.setHorizontalHeaderLabels([str(c) for c in columns])
-        table.setRowCount(len(rows))
-
-        for i, r in enumerate(rows):
-            for j, col in enumerate(columns):
-                val = r.get(col, "")
-                item = QTableWidgetItem("") if val is None else QTableWidgetItem(str(val))
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                table.setItem(i, j, item)
-
-        table.resizeColumnsToContents()
-        table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(table)
-
-        return widget
     
     def create_driver_tab(self, driver_details):
         """Create tab showing driver details"""
@@ -602,6 +583,1025 @@ class ProcessingResultsDialog(QDialog):
         """)
 
 
+class OrderEntryDialog(QDialog):
+    """Dialog for entering order data in a table format"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add New Orders")
+        self.setModal(True)
+        self.resize(1200, 600)
+        
+        # Initialize data
+        self.order_data = []
+        
+        # Setup UI
+        self.init_ui()
+        self.apply_styling()
+    
+    def init_ui(self):
+        """Initialize the user interface"""
+        layout = QVBoxLayout(self)
+        layout.setSpacing(20)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Header
+        header_label = QLabel("Enter Order Details")
+        header_label.setObjectName("headerTitle")
+        layout.addWidget(header_label)
+        
+        # Instructions
+        instructions = QLabel(
+            "Fill in the table below with your order information. "
+            "You can add multiple rows and edit any cell by double-clicking or using arrow keys to navigate."
+        )
+        instructions.setObjectName("infoText")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Table
+        self.table = QTableWidget()
+        self.table.setColumnCount(10)
+        self.table.setHorizontalHeaderLabels([
+            "Order Number", "Item Code", "Product Description", "Barcode", 
+            "Customer Type", "Quantity", "Site Name", "Account Code", 
+            "Dispatch Code", "Route"
+        ])
+        
+        # Set initial rows
+        self.table.setRowCount(5)
+        
+        # Initialize all cells with empty items for direct editing
+        for row in range(self.table.rowCount()):
+            for col in range(self.table.columnCount()):
+                item = QTableWidgetItem("")
+                self.table.setItem(row, col, item)
+        
+        # Make table editable and enable keyboard navigation
+        self.table.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed | QTableWidget.AnyKeyPressed)
+        
+        # Enable inline editing (no popup text box)
+        self.table.setItemDelegate(QStyledItemDelegate())
+        
+        # Enable keyboard navigation
+        self.table.setTabKeyNavigation(True)
+        self.table.setFocusPolicy(Qt.StrongFocus)
+        
+        # Set column widths for better spacing
+        column_widths = [120, 100, 200, 120, 120, 80, 120, 120, 120, 100]
+        for i, width in enumerate(column_widths):
+            self.table.setColumnWidth(i, width)
+        
+        # Set row height for better readability
+        self.table.verticalHeader().setDefaultSectionSize(35)
+        
+        # Resize columns to content but respect minimum widths
+        self.table.resizeColumnsToContents()
+        for i, width in enumerate(column_widths):
+            if self.table.columnWidth(i) < width:
+                self.table.setColumnWidth(i, width)
+        
+        # Enable horizontal scrolling for smaller screens
+        self.table.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
+        
+        layout.addWidget(self.table)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        add_row_btn = QPushButton("➕ Add Row")
+        add_row_btn.setObjectName("secondaryButton")
+        add_row_btn.clicked.connect(self.add_row)
+        
+        clear_btn = QPushButton("Clear All")
+        clear_btn.setObjectName("secondaryButton")
+        clear_btn.clicked.connect(self.clear_table)
+        
+        button_layout.addWidget(add_row_btn)
+        button_layout.addWidget(clear_btn)
+        button_layout.addStretch()
+        
+        # Dialog buttons
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        
+        button_layout.addWidget(self.button_box)
+        layout.addLayout(button_layout)
+        
+        # Connect keyboard events for better navigation
+        self.table.keyPressEvent = self.table_key_press_event
+    
+    def table_key_press_event(self, event):
+        """Handle keyboard navigation and editing"""
+        if event.key() in [Qt.Key_Return, Qt.Key_Enter]:
+            # Move to next row when Enter is pressed
+            current_row = self.table.currentRow()
+            current_col = self.table.currentColumn()
+            
+            if current_row < self.table.rowCount() - 1:
+                self.table.setCurrentCell(current_row + 1, current_col)
+            else:
+                # If at last row, add a new row and move there
+                self.add_row()
+                self.table.setCurrentCell(self.table.rowCount() - 1, current_col)
+            
+            # Start editing the new cell
+            self.table.editItem(self.table.item(self.table.currentRow(), self.table.currentColumn()))
+        elif event.key() == Qt.Key_Tab:
+            # Handle Tab navigation
+            current_row = self.table.currentRow()
+            current_col = self.table.currentColumn()
+            
+            if current_col < self.table.columnCount() - 1:
+                # Move to next column
+                self.table.setCurrentCell(current_row, current_col + 1)
+            else:
+                # Move to first column of next row
+                if current_row < self.table.rowCount() - 1:
+                    self.table.setCurrentCell(current_row + 1, 0)
+                else:
+                    # If at last row, add a new row
+                    self.add_row()
+                    self.table.setCurrentCell(self.table.rowCount() - 1, 0)
+            
+            # Start editing the new cell
+            self.table.editItem(self.table.item(self.table.currentRow(), self.table.currentColumn()))
+        elif event.key() == Qt.Key_Backtab:
+            # Handle Shift+Tab navigation
+            current_row = self.table.currentRow()
+            current_col = self.table.currentColumn()
+            
+            if current_col > 0:
+                # Move to previous column
+                self.table.setCurrentCell(current_row, current_col - 1)
+            else:
+                # Move to last column of previous row
+                if current_row > 0:
+                    self.table.setCurrentCell(current_row - 1, self.table.columnCount() - 1)
+            
+            # Start editing the new cell
+            self.table.editItem(self.table.item(self.table.currentRow(), self.table.currentColumn()))
+        else:
+            # For any other key, start editing if not already editing
+            if not self.table.state() == QTableWidget.EditingState:
+                current_item = self.table.item(self.table.currentRow(), self.table.currentColumn())
+                if not current_item:
+                    current_item = QTableWidgetItem("")
+                    self.table.setItem(self.table.currentRow(), self.table.currentColumn(), current_item)
+                self.table.editItem(current_item)
+            
+            # Call the original keyPressEvent
+            QTableWidget.keyPressEvent(self.table, event)
+    
+    def add_row(self):
+        """Add a new row to the table"""
+        current_rows = self.table.rowCount()
+        self.table.setRowCount(current_rows + 1)
+        
+        # Initialize the new row with empty items for direct editing
+        for col in range(self.table.columnCount()):
+            item = QTableWidgetItem("")
+            self.table.setItem(current_rows, col, item)
+    
+    def clear_table(self):
+        """Clear all data from the table"""
+        self.table.setRowCount(0)
+        self.table.setRowCount(5)
+        
+        # Initialize all cells with empty items for direct editing
+        for row in range(self.table.rowCount()):
+            for col in range(self.table.columnCount()):
+                item = QTableWidgetItem("")
+                self.table.setItem(row, col, item)
+    
+    def get_order_data(self):
+        """Extract order data from the table"""
+        data = []
+        
+        for row in range(self.table.rowCount()):
+            row_data = {}
+            has_data = False
+            
+            # Extract data from each column
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                value = item.text() if item else ""
+                
+                # Map column headers to expected field names
+                if col == 0:  # Order Number
+                    row_data['Order Number'] = value
+                elif col == 1:  # Item Code
+                    row_data['Item Code'] = value
+                elif col == 2:  # Product Description
+                    row_data['Product Description'] = value
+                elif col == 3:  # Barcode
+                    row_data['Barcode'] = value
+                elif col == 4:  # Customer Type
+                    row_data['Customer Type'] = value
+                elif col == 5:  # Quantity
+                    row_data['Quantity'] = value
+                elif col == 6:  # Site Name
+                    row_data['Site Name'] = value
+                elif col == 7:  # Account Code
+                    row_data['Account Code'] = value
+                elif col == 8:  # Dispatch Code
+                    row_data['Dispatch Code'] = value
+                elif col == 9:  # Route
+                    row_data['Route'] = value
+                
+                if value.strip():
+                    has_data = True
+            
+            # Only add rows that have at least some data
+            if has_data:
+                data.append(row_data)
+        
+        return data
+    
+    def apply_styling(self):
+        """Apply styling to the dialog"""
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8fafc;
+            }
+            
+            QLabel#headerTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #1e293b;
+                margin-bottom: 10px;
+            }
+            
+            QLabel#infoText {
+                color: #6b7280;
+                font-size: 14px;
+                margin-bottom: 10px;
+            }
+            
+            QTableWidget {
+                gridline-color: #e2e8f0;
+                border: 2px solid #e2e8f0;
+                border-radius: 8px;
+                background-color: white;
+                selection-background-color: #eff6ff;
+                selection-color: #1e40af;
+                font-size: 13px;
+            }
+            
+            QTableWidget::item {
+                padding: 8px 12px;
+                border-bottom: 1px solid #f1f5f9;
+                border-right: 1px solid #f1f5f9;
+            }
+            
+            QTableWidget::item:selected {
+                background-color: #eff6ff;
+                color: #1e40af;
+                font-weight: 500;
+            }
+            
+            QTableWidget::item:focus {
+                background-color: #fef3c7;
+                border: 2px solid #f59e0b;
+            }
+            
+            QTableWidget QHeaderView::section {
+                background-color: #f8fafc;
+                border: none;
+                border-bottom: 2px solid #e2e8f0;
+                border-right: 1px solid #e2e8f0;
+                padding: 12px 8px;
+                font-weight: 600;
+                color: #374151;
+                font-size: 13px;
+            }
+            
+            QTableWidget QHeaderView::section:first {
+                border-left: none;
+            }
+            
+            QTableWidget QHeaderView::section:last {
+                border-right: none;
+            }
+            
+            QPushButton#secondaryButton {
+                background-color: #6b7280;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-weight: 500;
+                font-size: 14px;
+                min-width: 100px;
+            }
+            
+            QPushButton#secondaryButton:hover {
+                background-color: #4b5563;
+            }
+            
+            QPushButton#secondaryButton:pressed {
+                background-color: #374151;
+            }
+            
+            QDialogButtonBox QPushButton {
+                background-color: #2563eb;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-weight: 500;
+                font-size: 14px;
+                min-width: 80px;
+            }
+            
+            QDialogButtonBox QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+            
+            QDialogButtonBox QPushButton:pressed {
+                background-color: #1e40af;
+            }
+        """)
+
+
+class PDFGraphicsView(QGraphicsView):
+    """Custom graphics view for PDF coordinate selection"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_dialog = parent
+        self.drawing = False
+        self.start_point = None
+        self.end_point = None
+    
+    def mousePressEvent(self, event):
+        """Handle mouse press for starting rectangle selection"""
+        if event.button() == Qt.LeftButton:
+            self.drawing = True
+            self.start_point = self.mapToScene(event.pos())
+            self.end_point = self.start_point
+            if self.parent_dialog:
+                self.parent_dialog.status_label.setText("Drag to create selection rectangle")
+        super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for drawing rectangle"""
+        if self.drawing:
+            self.end_point = self.mapToScene(event.pos())
+            if self.parent_dialog:
+                self.parent_dialog.update_selection_rect()
+        super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release for finishing rectangle selection"""
+        if event.button() == Qt.LeftButton and self.drawing:
+            self.drawing = False
+            self.end_point = self.mapToScene(event.pos())
+            if self.parent_dialog:
+                self.parent_dialog.finish_selection()
+        super().mouseReleaseEvent(event)
+
+
+class MultiRegionCoordinateSelectorDialog(QDialog):
+    """Dialog for selecting multiple OCR regions visually on PDF"""
+    
+    def __init__(self, pdf_path, parent=None):
+        super().__init__(parent)
+        self.pdf_path = pdf_path
+        self.current_region = 'region_1'  # Start with region 1
+        
+        # Get regions from parent application if available
+        if parent and hasattr(parent, 'ocr_regions'):
+            self.regions = parent.ocr_regions.copy()
+        else:
+            # Fallback to default regions
+            self.regions = {
+                'region_1': {'coordinates': None, 'color': 'red', 'name': 'Region 1'},
+                'region_2': {'coordinates': None, 'color': 'blue', 'name': 'Region 2'},
+                'region_3': {'coordinates': None, 'color': 'green', 'name': 'Region 3'},
+                'region_4': {'coordinates': None, 'color': 'orange', 'name': 'Region 4'},
+                'region_5': {'coordinates': None, 'color': 'purple', 'name': 'Region 5'}
+            }
+        self.drawing = False
+        self.start_point = None
+        self.end_point = None
+        
+        self.setWindowTitle("Configure Multiple OCR Regions")
+        self.setModal(True)
+        self.resize(1200, 900)
+        
+        self.init_ui()
+        self.load_pdf()
+    
+    def init_ui(self):
+        """Initialize the user interface"""
+        layout = QVBoxLayout(self)
+        
+        # Instructions
+        instructions = QLabel(
+            "Configure Multiple OCR Regions\n"
+            "Select 5 different regions where OCR should extract text:\n"
+            "• Region 1 (Red): e.g., 'Route Cork 1'\n"
+            "• Region 2 (Blue): e.g., Order number or date\n"
+            "• Region 3 (Green): e.g., Customer reference\n"
+            "• Region 4 (Orange): Additional data field\n"
+            "• Region 5 (Purple): Additional data field\n\n"
+            "Use the region selector below to switch between regions, then click and drag to draw rectangles."
+        )
+        instructions.setObjectName("sectionTitle")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Region selector
+        region_layout = QHBoxLayout()
+        region_layout.addWidget(QLabel("Select Region:"))
+        
+        self.region_combo = QComboBox()
+        # Dynamically add all regions from the configuration
+        for region_id, region in self.regions.items():
+            self.region_combo.addItem(f"{region['name']} ({region['color'].title()})", region_id)
+        self.region_combo.currentTextChanged.connect(self.on_region_changed)
+        region_layout.addWidget(self.region_combo)
+        
+        region_layout.addStretch()
+        layout.addLayout(region_layout)
+        
+        # Graphics view for PDF display
+        self.graphics_view = PDFGraphicsView(self)
+        self.graphics_view.setMouseTracking(True)
+        layout.addWidget(self.graphics_view)
+        
+        # Scene for graphics
+        self.scene = QGraphicsScene()
+        self.graphics_view.setScene(self.scene)
+        
+        # Status label
+        self.status_label = QLabel("Select Region 1 (Red) and click and drag to select the OCR region")
+        self.status_label.setObjectName("infoText")
+        layout.addWidget(self.status_label)
+        
+        # Coordinate display
+        self.coord_label = QLabel("Region 1 (Red): Not selected")
+        self.coord_label.setObjectName("infoText")
+        layout.addWidget(self.coord_label)
+        
+        # Region status display
+        self.region_status_label = QLabel("Region 2 (Blue): Not selected | Region 3 (Green): Not selected")
+        self.region_status_label.setObjectName("infoText")
+        layout.addWidget(self.region_status_label)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.clear_btn = QPushButton("Clear Current Region")
+        self.clear_btn.clicked.connect(self.clear_current_region)
+        self.clear_btn.setEnabled(False)
+        
+        self.test_btn = QPushButton("Test Current Region")
+        self.test_btn.clicked.connect(self.test_current_region)
+        self.test_btn.setEnabled(False)
+        self.test_btn.setObjectName("secondaryButton")
+        
+        self.show_all_btn = QPushButton("Show All Regions")
+        self.show_all_btn.clicked.connect(self.show_all_regions)
+        self.show_all_btn.setEnabled(False)
+        self.show_all_btn.setObjectName("secondaryButton")
+        
+        self.save_btn = QPushButton("Save All Regions")
+        self.save_btn.clicked.connect(self.save_all_regions)
+        self.save_btn.setEnabled(False)
+        self.save_btn.setObjectName("primaryButton")
+        
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self.reject)
+        
+        button_layout.addWidget(self.clear_btn)
+        button_layout.addWidget(self.test_btn)
+        button_layout.addWidget(self.show_all_btn)
+        button_layout.addStretch()
+        button_layout.addWidget(self.cancel_btn)
+        button_layout.addWidget(self.save_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def load_pdf(self):
+        """Load PDF and display first page"""
+        try:
+            # Open PDF with PyMuPDF
+            pdf_document = fitz.open(self.pdf_path)
+            if len(pdf_document) == 0:
+                QMessageBox.warning(self, "Error", "PDF file is empty or corrupted")
+                return
+            
+            # Get first page
+            page = pdf_document[0]
+            
+            # Convert to image
+            mat = fitz.Matrix(1.0, 1.0)  # Use 1.0x zoom to match OCR processing
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            # Convert to QPixmap
+            pixmap = QPixmap()
+            pixmap.loadFromData(img_data)
+            
+            # Add to scene
+            self.pixmap_item = QGraphicsPixmapItem(pixmap)
+            self.scene.addItem(self.pixmap_item)
+            
+            # Store original image size for coordinate conversion
+            self.original_size = (pix.width, pix.height)
+            self.scale_factor = 1.0  # Same as matrix zoom
+            
+            pdf_document.close()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load PDF: {str(e)}")
+    
+    def on_region_changed(self):
+        """Handle region selection change"""
+        self.current_region = self.region_combo.currentData()
+        region = self.regions[self.current_region]
+        
+        # Clear existing rectangles to show only the current region
+        for item in self.scene.items():
+            if isinstance(item, QGraphicsRectItem) and item != self.pixmap_item:
+                self.scene.removeItem(item)
+        
+        # Draw only the current region if it has coordinates
+        if region['coordinates']:
+            x1, y1, x2, y2 = region['coordinates']
+            rect = QRectF(x1, y1, x2 - x1, y2 - y1)
+            
+            # Set color based on current region
+            if region['color'] == 'red':
+                pen_color = QColor(255, 0, 0, 200)
+            elif region['color'] == 'blue':
+                pen_color = QColor(0, 0, 255, 200)
+            elif region['color'] == 'green':
+                pen_color = QColor(0, 255, 0, 200)
+            elif region['color'] == 'orange':
+                pen_color = QColor(255, 165, 0, 200)  # Orange color
+            elif region['color'] == 'purple':
+                pen_color = QColor(128, 0, 128, 200)  # Purple color
+            else:
+                pen_color = QColor(128, 128, 128, 200)
+            
+            rect_item = self.scene.addRect(rect, QPen(pen_color, 2))
+            rect_item.setZValue(1)
+            
+            # Add label
+            text_item = self.scene.addText(region['name'], QFont("Arial", 10, QFont.Bold))
+            text_item.setDefaultTextColor(pen_color)
+            text_item.setPos(rect.x(), rect.y() - 15)
+            text_item.setZValue(2)
+        
+        # Update status labels
+        self.status_label.setText(f"Select {region['name']} ({region['color'].title()}) and click and drag to select the OCR region")
+        
+        if region['coordinates']:
+            self.coord_label.setText(f"{region['name']} ({region['color'].title()}): {region['coordinates']}")
+            self.clear_btn.setEnabled(True)
+            self.test_btn.setEnabled(True)
+        else:
+            self.coord_label.setText(f"{region['name']} ({region['color'].title()}): Not selected")
+            self.clear_btn.setEnabled(False)
+            self.test_btn.setEnabled(False)
+        
+        # Update region status
+        self.update_region_status()
+    
+    def update_region_status(self):
+        """Update the region status display"""
+        status_parts = []
+        for region_id, region in self.regions.items():
+            if region_id != self.current_region:
+                status = "Selected" if region['coordinates'] else "Not selected"
+                status_parts.append(f"{region['name']} ({region['color'].title()}): {status}")
+        
+        self.region_status_label.setText(" | ".join(status_parts))
+        
+        # Enable save button if at least one region is configured
+        configured_count = sum(1 for region in self.regions.values() if region['coordinates'])
+        self.save_btn.setEnabled(configured_count > 0)
+        self.show_all_btn.setEnabled(configured_count > 0)
+    
+    def draw_all_regions(self):
+        """Draw all configured regions on the PDF"""
+        # Clear existing rectangles
+        for item in self.scene.items():
+            if isinstance(item, QGraphicsRectItem) and item != self.pixmap_item:
+                self.scene.removeItem(item)
+        
+        # Draw all regions
+        for region_id, region in self.regions.items():
+            if region['coordinates']:
+                x1, y1, x2, y2 = region['coordinates']
+                rect = QRectF(x1, y1, x2 - x1, y2 - y1)
+                
+                # Set color based on region
+                if region['color'] == 'red':
+                    pen_color = QColor(255, 0, 0, 200)
+                elif region['color'] == 'blue':
+                    pen_color = QColor(0, 0, 255, 200)
+                elif region['color'] == 'green':
+                    pen_color = QColor(0, 255, 0, 200)
+                elif region['color'] == 'orange':
+                    pen_color = QColor(255, 165, 0, 200)  # Orange color
+                elif region['color'] == 'purple':
+                    pen_color = QColor(128, 0, 128, 200)  # Purple color
+                else:
+                    pen_color = QColor(128, 128, 128, 200)
+                
+                rect_item = self.scene.addRect(rect, QPen(pen_color, 2))
+                rect_item.setZValue(1)
+                
+                # Add label
+                text_item = self.scene.addText(region['name'], QFont("Arial", 10, QFont.Bold))
+                text_item.setDefaultTextColor(pen_color)
+                text_item.setPos(rect.x(), rect.y() - 15)
+                text_item.setZValue(2)
+    
+    def finish_selection(self):
+        """Finish the selection and calculate coordinates"""
+        if self.graphics_view.start_point and self.graphics_view.end_point:
+            # Convert to original image coordinates
+            x1 = int(self.graphics_view.start_point.x() * self.scale_factor)
+            y1 = int(self.graphics_view.start_point.y() * self.scale_factor)
+            x2 = int(self.graphics_view.end_point.x() * self.scale_factor)
+            y2 = int(self.graphics_view.end_point.y() * self.scale_factor)
+            
+            # Ensure proper order
+            x1, x2 = min(x1, x2), max(x1, x2)
+            y1, y2 = min(y1, y2), max(y1, y2)
+            
+            # Save coordinates to current region
+            self.regions[self.current_region]['coordinates'] = (x1, y1, x2, y2)
+            
+            # Update display
+            region = self.regions[self.current_region]
+            self.coord_label.setText(f"{region['name']} ({region['color'].title()}): {region['coordinates']}")
+            self.status_label.setText(f"Selection complete for {region['name']}! Switch to another region or save all regions.")
+            
+            # Enable buttons
+            self.clear_btn.setEnabled(True)
+            self.test_btn.setEnabled(True)
+            
+            # Update region status and redraw
+            self.update_region_status()
+            self.draw_all_regions()
+    
+    def update_selection_rect(self):
+        """Update the selection rectangle display"""
+        if self.graphics_view.start_point and self.graphics_view.end_point:
+            # Remove previous rectangle
+            for item in self.scene.items():
+                if isinstance(item, QGraphicsRectItem) and item != self.pixmap_item:
+                    self.scene.removeItem(item)
+            
+            # Create new rectangle with current region's color
+            rect = QRectF(self.graphics_view.start_point, self.graphics_view.end_point)
+            current_color = self.regions[self.current_region]['color']
+            
+            # Set color based on current region
+            if current_color == 'red':
+                pen_color = QColor(255, 0, 0, 200)
+            elif current_color == 'blue':
+                pen_color = QColor(0, 0, 255, 200)
+            elif current_color == 'green':
+                pen_color = QColor(0, 255, 0, 200)
+            elif current_color == 'orange':
+                pen_color = QColor(255, 165, 0, 200)  # Orange color
+            elif current_color == 'purple':
+                pen_color = QColor(128, 0, 128, 200)  # Purple color
+            else:
+                pen_color = QColor(128, 128, 128, 200)
+            
+            rect_item = self.scene.addRect(rect, QPen(pen_color, 2))
+            rect_item.setZValue(1)  # Above the image
+    
+    def clear_current_region(self):
+        """Clear the current region selection"""
+        self.regions[self.current_region]['coordinates'] = None
+        
+        # Update display
+        region = self.regions[self.current_region]
+        self.coord_label.setText(f"{region['name']} ({region['color'].title()}): Not selected")
+        self.status_label.setText(f"Select {region['name']} ({region['color'].title()}) and click and drag to select the OCR region")
+        
+        # Update buttons and redraw
+        self.clear_btn.setEnabled(False)
+        self.test_btn.setEnabled(False)
+        self.update_region_status()
+        self.draw_all_regions()
+    
+    def test_current_region(self):
+        """Test OCR on the current region"""
+        region = self.regions[self.current_region]
+        if not region['coordinates']:
+            return
+        
+        try:
+            # Open PDF and get first page
+            pdf_document = fitz.open(self.pdf_path)
+            page = pdf_document[0]
+            
+            # Convert to image with same settings as main processing
+            mat = fitz.Matrix(1.0, 1.0)  # 1.0x zoom to match coordinate selector
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            # Convert to PIL Image
+            image = Image.open(io.BytesIO(img_data))
+            
+            # Crop to selected coordinates
+            cropped_image = image.crop(region['coordinates'])
+            
+            # Test OCR with multiple configurations
+            results = []
+            psm_modes = [3, 6, 7, 8, 13]
+            
+            for psm_mode in psm_modes:
+                try:
+                    text = pytesseract.image_to_string(cropped_image, config=f'--psm {psm_mode}')
+                    if text.strip():
+                        results.append(f"PSM {psm_mode}: '{text.strip()}'")
+                except Exception as e:
+                    results.append(f"PSM {psm_mode}: Error - {str(e)}")
+            
+            pdf_document.close()
+            
+            # Show results
+            result_text = f"OCR Test Results for {region['name']} ({region['color'].title()}):\n"
+            result_text += f"Coordinates: {region['coordinates']}\n\n"
+            if results:
+                result_text += "\n".join(results)
+            else:
+                result_text += "No text detected with any OCR configuration."
+            
+            QMessageBox.information(
+                self,
+                f"OCR Test Results - {region['name']}",
+                result_text
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "OCR Test Error",
+                f"Error testing OCR: {str(e)}"
+            )
+    
+    def show_all_regions(self):
+        """Show all configured regions"""
+        configured_regions = [region for region in self.regions.values() if region['coordinates']]
+        if not configured_regions:
+            QMessageBox.information(self, "No Regions", "No regions have been configured yet.")
+            return
+        
+        # Create a summary dialog
+        summary_dialog = QDialog(self)
+        summary_dialog.setWindowTitle("All Configured OCR Regions")
+        summary_dialog.setModal(True)
+        summary_dialog.resize(600, 400)
+        
+        layout = QVBoxLayout(summary_dialog)
+        
+        # Title
+        title = QLabel("Configured OCR Regions")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Text area for results
+        text_area = QTextEdit()
+        text_area.setReadOnly(True)
+        text_area.setFont(QFont("Consolas", 10))
+        
+        result_text = "All Configured OCR Regions\n"
+        result_text += "=" * 40 + "\n\n"
+        
+        for region in configured_regions:
+            result_text += f"{region['name']} ({region['color'].title()}):\n"
+            result_text += f"  Coordinates: {region['coordinates']}\n\n"
+        
+        text_area.setPlainText(result_text)
+        layout.addWidget(text_area)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(summary_dialog.accept)
+        layout.addWidget(close_btn)
+        
+        # Show dialog
+        summary_dialog.exec()
+    
+    def save_all_regions(self):
+        """Save all configured regions"""
+        configured_regions = [region for region in self.regions.values() if region['coordinates']]
+        if not configured_regions:
+            QMessageBox.warning(self, "No Regions", "No regions have been configured yet.")
+            return
+        
+        # Save to config file
+        config = {
+            'ocr_regions': self.regions,
+            'setup_completed': True,
+            'setup_date': datetime.now().isoformat()
+        }
+        
+        config_path = Path("app_data") / "ocr_config.json"
+        config_path.parent.mkdir(exist_ok=True)
+        
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        # Update parent application's regions if available
+        if hasattr(self.parent(), 'ocr_regions'):
+            self.parent().ocr_regions = self.regions.copy()
+        
+        # Show success message
+        region_list = "\n".join([f"• {region['name']} ({region['color'].title()}): {region['coordinates']}" 
+                                for region in configured_regions])
+        
+        QMessageBox.information(
+            self,
+            "Configuration Complete",
+            f"OCR regions saved successfully!\n\n"
+            f"Configured regions:\n{region_list}\n\n"
+            f"Config saved to: {config_path}"
+        )
+        
+        self.accept()
+    
+    def show_ocr_region(self):
+        """Show the current OCR region on the PDF"""
+        if not hasattr(self, 'coordinates') or not self.coordinates:
+            return
+        
+        try:
+            # Create a new dialog to show the OCR region
+            region_dialog = QDialog(self)
+            region_dialog.setWindowTitle("Current OCR Region")
+            region_dialog.setModal(True)
+            region_dialog.resize(1200, 900)
+            
+            layout = QVBoxLayout(region_dialog)
+            
+            # Instructions
+            instructions = QLabel(
+                f"Current OCR Region: {self.coordinates}\n"
+                "The red rectangle shows exactly where OCR will extract text from."
+            )
+            instructions.setObjectName("sectionTitle")
+            instructions.setWordWrap(True)
+            layout.addWidget(instructions)
+            
+            # Graphics view for PDF display
+            graphics_view = QGraphicsView()
+            layout.addWidget(graphics_view)
+            
+            # Scene for graphics
+            scene = QGraphicsScene()
+            graphics_view.setScene(scene)
+            
+            # Load PDF and display with OCR region highlighted
+            pdf_document = fitz.open(self.pdf_path)
+            page = pdf_document[0]
+            
+            # Convert to image
+            mat = fitz.Matrix(1.0, 1.0)  # Normal size for better overview
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            # Convert to QPixmap
+            pixmap = QPixmap()
+            pixmap.loadFromData(img_data)
+            
+            # Add to scene
+            pixmap_item = QGraphicsPixmapItem(pixmap)
+            scene.addItem(pixmap_item)
+            
+            # Add OCR region rectangle
+            x1, y1, x2, y2 = self.coordinates
+            # Convert coordinates to display coordinates (divide by scale factor)
+            scale_factor = 1.0  # Same as matrix
+            rect = QRectF(
+                x1 / scale_factor, 
+                y1 / scale_factor, 
+                (x2 - x1) / scale_factor, 
+                (y2 - y1) / scale_factor
+            )
+            
+            # Create red rectangle for OCR region
+            rect_item = scene.addRect(rect, QPen(QColor(255, 0, 0, 255), 3))
+            rect_item.setZValue(1)  # Above the image
+            
+            # Add text label
+            text_item = scene.addText("OCR Region", QFont("Arial", 12, QFont.Bold))
+            text_item.setDefaultTextColor(QColor(255, 0, 0))
+            text_item.setPos(rect.x(), rect.y() - 20)
+            text_item.setZValue(2)
+            
+            pdf_document.close()
+            
+            # Close button
+            close_btn = QPushButton("Close")
+            close_btn.clicked.connect(region_dialog.accept)
+            layout.addWidget(close_btn)
+            
+            # Show dialog
+            region_dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error showing OCR region: {str(e)}"
+            )
+    
+    def test_ocr(self):
+        """Test OCR on the selected region"""
+        if not hasattr(self, 'coordinates') or not self.coordinates:
+            return
+        
+        try:
+            # Open PDF and get first page
+            pdf_document = fitz.open(self.pdf_path)
+            page = pdf_document[0]
+            
+            # Convert to image with same settings as main processing
+            mat = fitz.Matrix(1.0, 1.0)  # 1.0x zoom to match coordinate selector
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            # Convert to PIL Image
+            image = Image.open(io.BytesIO(img_data))
+            
+            # Crop to selected coordinates
+            cropped_image = image.crop(self.coordinates)
+            
+            # Test OCR with multiple configurations
+            results = []
+            psm_modes = [3, 6, 7, 8, 13]
+            
+            for psm_mode in psm_modes:
+                try:
+                    text = pytesseract.image_to_string(cropped_image, config=f'--psm {psm_mode}')
+                    if text.strip():
+                        results.append(f"PSM {psm_mode}: '{text.strip()}'")
+                except Exception as e:
+                    results.append(f"PSM {psm_mode}: Error - {str(e)}")
+            
+            pdf_document.close()
+            
+            # Show results
+            result_text = f"OCR Test Results for coordinates {self.coordinates}:\n\n"
+            if results:
+                result_text += "\n".join(results)
+            else:
+                result_text += "No text detected with any OCR configuration."
+            
+            QMessageBox.information(
+                self,
+                "OCR Test Results",
+                result_text
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "OCR Test Error",
+                f"Error testing OCR: {str(e)}"
+            )
+    
+    def save_coordinates(self):
+        """Save the selected coordinates"""
+        if hasattr(self, 'coordinates') and self.coordinates:
+            # Save to a config file
+            config = {
+                'ocr_coordinates': self.coordinates,
+                'setup_completed': True,
+                'setup_date': datetime.now().isoformat()
+            }
+            
+            config_path = Path("app_data") / "ocr_config.json"
+            config_path.parent.mkdir(exist_ok=True)
+            
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            QMessageBox.information(
+                self,
+                "Setup Complete",
+                f"OCR coordinates saved successfully!\n\n"
+                f"Coordinates: {self.coordinates}\n"
+                f"Config saved to: {config_path}"
+            )
+            
+            self.accept()
+
+
 class DispatchScanningApp(QMainWindow):
     """Upload Excel Files, Process PDFs, Generate Barcodes"""
     
@@ -614,18 +1614,31 @@ class DispatchScanningApp(QMainWindow):
         self.delivery_json_file = "delivery_sequence_data.json"
         self.selected_picking_pdf_files = []
 
-        self.selected_excel_file = ""  # NEW: Excel file with order numbers in column A
-        self.selected_output_folder = ""  # NEW: Selected output folder
-        self.excel_order_numbers = []  # NEW: Order numbers from Excel column A
-        # Additional Excel import for late orders
-        self.selected_additional_excel_file = ""
-        self.additional_new_rows_data = []
-        self.additional_new_rows_count = 0
         self.order_barcodes = {}
         self.processing_thread = None
         
         # Track processing state
         self.picking_dockets_processed = False
+        
+        # Excel Generation data
+        self.excel_selected_output_folder = ""
+        self.excel_selected_pdf_files = []
+        
+        # OCR Configuration - Multiple regions (hardcoded coordinates)
+        self.ocr_regions = {
+            'region_1': {'coordinates': [387, 765, 590, 795], 'color': 'red', 'name': 'Region 1'},
+            'region_2': {'coordinates': [432, 44, 591, 65], 'color': 'blue', 'name': 'Region 2'},
+            'region_3': {'coordinates': [23, 47, 326, 73], 'color': 'green', 'name': 'Region 3'},
+            'region_4': {'coordinates': [28, 772, 183, 799], 'color': 'orange', 'name': 'Region 4'},
+            'region_5': {'coordinates': None, 'color': 'purple', 'name': 'Region 5'}
+        }
+        self.ocr_setup_completed = True  # Mark as completed since coordinates are hardcoded
+        
+        # Print hardcoded OCR configuration
+        configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
+        print(f"OCR configuration loaded: {len(configured_regions)} regions configured (hardcoded)")
+        for region in configured_regions:
+            print(f"  {region['name']} ({region['color']}): {region['coordinates']}")
         
         # Initialize UI
         self.init_ui()
@@ -646,30 +1659,16 @@ class DispatchScanningApp(QMainWindow):
         
         # Main layout
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 20)
         
         # Header
         header_frame = self.create_header()
         main_layout.addWidget(header_frame)
         
-        # Content area - two column layout
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(20)
-        
-        # Left column - File Selection
-        left_column = self.create_file_selection_column()
-        content_layout.addWidget(left_column)
-        
-        # Right column - Processing Section
-        right_column = self.create_processing_column()
-        content_layout.addWidget(right_column)
-        
-        # Set column proportions (50% left, 50% right)
-        content_layout.setStretch(0, 5)
-        content_layout.setStretch(1, 5)
-        
-        main_layout.addLayout(content_layout)
+        # Content area - main processing interface
+        main_processing_content = self.create_main_processing_content()
+        main_layout.addWidget(main_processing_content)
         
         # Status bar
         self.status_bar = QStatusBar()
@@ -688,9 +1687,9 @@ class DispatchScanningApp(QMainWindow):
         header_frame.setFixedHeight(55)
         
         layout = QHBoxLayout(header_frame)
-        layout.setContentsMargins(0, 10, 0, 10)
+        layout.setContentsMargins(20, 10, 0, 10)
         
-        title_label = QLabel("Dispatch Scanning")
+        title_label = QLabel("Dispatch orders Upload")
         title_label.setObjectName("headerTitle")
         layout.addWidget(title_label)
         
@@ -700,11 +1699,260 @@ class DispatchScanningApp(QMainWindow):
         
         return header_frame
     
+    def create_main_processing_content(self):
+        """Create the main processing content with tabbed interface"""
+        # Create main tab widget
+        main_tab_widget = QTabWidget()
+        main_tab_widget.setObjectName("mainTabWidget")
+        
+        # Tab 1: Dispatch Processing (existing functionality)
+        dispatch_tab = self.create_dispatch_processing_tab()
+        main_tab_widget.addTab(dispatch_tab, "Dispatch Processing")
+        
+        # Tab 2: Excel Generation (new functionality)
+        excel_tab = self.create_excel_generation_tab()
+        main_tab_widget.addTab(excel_tab, "Excel Generation")
+        
+        
+        return main_tab_widget
+    
+    def create_dispatch_processing_tab(self):
+        """Create the dispatch processing tab with existing functionality"""
+        # Main scroll area for better organization
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # Content widget
+        content_widget = QWidget()
+        content_layout = QHBoxLayout(content_widget)
+        content_layout.setSpacing(20)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Left column - File Selection
+        left_column = self.create_file_selection_column()
+        content_layout.addWidget(left_column)
+        
+        # Right column - Processing Section
+        right_column = self.create_processing_column()
+        content_layout.addWidget(right_column)
+        
+        # Set column proportions (50% left, 50% right)
+        content_layout.setStretch(0, 5)
+        content_layout.setStretch(1, 5)
+        
+        # Set the content widget to the scroll area
+        scroll_area.setWidget(content_widget)
+        
+        return scroll_area
+    
+    def create_excel_generation_tab(self):
+        """Create the Excel Generation tab with folder selection and PDF upload functionality"""
+        # Main scroll area for better organization
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # Content widget
+        content_widget = QWidget()
+        content_layout = QHBoxLayout(content_widget)
+        content_layout.setSpacing(20)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Left column - File Selection
+        left_column = self.create_excel_file_selection_column()
+        content_layout.addWidget(left_column)
+        
+        # Right column - Processing Section
+        right_column = self.create_excel_processing_column()
+        content_layout.addWidget(right_column)
+        
+        # Set column proportions (50% left, 50% right)
+        content_layout.setStretch(0, 5)
+        content_layout.setStretch(1, 5)
+        
+        # Set the content widget to the scroll area
+        scroll_area.setWidget(content_widget)
+        
+        return scroll_area
+    
+    def create_excel_file_selection_column(self):
+        """Create left column with file selection controls for Excel Generation"""
+        column = QFrame()
+        column.setObjectName("columnFrame")
+        column.setFixedWidth(550)
+        
+        layout = QVBoxLayout(column)
+        layout.setSpacing(8)
+        
+        # Output folder section
+        output_section = self.create_excel_output_folder_section()
+        layout.addWidget(output_section)
+        
+        # PDF files section
+        pdf_section = self.create_excel_pdf_files_section()
+        layout.addWidget(pdf_section)
+        
+        layout.addStretch()
+        
+        return column
+    
+    def create_excel_output_folder_section(self):
+        """Create output folder selection section for Excel Generation"""
+        section = QFrame()
+        section.setObjectName("section")
+        
+        layout = QVBoxLayout(section)
+        layout.setSpacing(0)
+        
+        # Section title
+        title = QLabel("📁 Output Folder")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Button row
+        btn_layout = QHBoxLayout()
+        self.excel_browse_output_btn = QPushButton("Select Output Folder")
+        self.excel_browse_output_btn.clicked.connect(self.browse_excel_output_folder)
+        
+        self.excel_clear_output_btn = QPushButton("Clear")
+        self.excel_clear_output_btn.setObjectName("secondaryButton")
+        self.excel_clear_output_btn.clicked.connect(self.clear_excel_output_folder)
+        
+        btn_layout.addWidget(self.excel_browse_output_btn)
+        btn_layout.addWidget(self.excel_clear_output_btn)
+        layout.addLayout(btn_layout)
+        
+        # Status display
+        self.excel_output_folder_label = QLabel("No output folder selected")
+        self.excel_output_folder_label.setObjectName("infoText")
+        self.excel_output_folder_label.setWordWrap(True)
+        layout.addWidget(self.excel_output_folder_label)
+        
+        return section
+    
+    def create_excel_pdf_files_section(self):
+        """Create PDF files selection section for Excel Generation"""
+        section = QFrame()
+        section.setObjectName("section")
+        
+        layout = QVBoxLayout(section)
+        layout.setSpacing(0)
+        
+        # Section title
+        title = QLabel("📄 PDF Files to Process")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Subtitle
+        subtitle = QLabel("Select multiple PDF files for Excel generation")
+        subtitle.setObjectName("subtitleText")
+        layout.addWidget(subtitle)
+        
+        # Button row
+        btn_layout = QHBoxLayout()
+        self.excel_browse_pdf_btn = QPushButton("Select PDF Files")
+        self.excel_browse_pdf_btn.clicked.connect(self.browse_excel_pdf_files)
+        
+        self.excel_clear_pdf_btn = QPushButton("Clear All")
+        self.excel_clear_pdf_btn.setObjectName("secondaryButton")
+        self.excel_clear_pdf_btn.clicked.connect(self.clear_excel_pdf_files)
+        
+        btn_layout.addWidget(self.excel_browse_pdf_btn)
+        btn_layout.addWidget(self.excel_clear_pdf_btn)
+        layout.addLayout(btn_layout)
+        
+        # Quick OCR setup button
+        quick_setup_layout = QHBoxLayout()
+        self.quick_ocr_setup_btn = QPushButton("Quick OCR Setup (Select PDF)")
+        self.quick_ocr_setup_btn.setObjectName("secondaryButton")
+        self.quick_ocr_setup_btn.clicked.connect(self.quick_ocr_setup)
+        quick_setup_layout.addWidget(self.quick_ocr_setup_btn)
+        quick_setup_layout.addStretch()
+        layout.addLayout(quick_setup_layout)
+        
+        # Status display
+        self.excel_pdf_files_label = QLabel("No PDF files selected")
+        self.excel_pdf_files_label.setObjectName("infoText")
+        self.excel_pdf_files_label.setWordWrap(True)
+        layout.addWidget(self.excel_pdf_files_label)
+        
+        return section
+    
+    def create_excel_processing_column(self):
+        """Create right column with processing controls for Excel Generation"""
+        column = QFrame()
+        column.setObjectName("columnFrame")
+        
+        layout = QVBoxLayout(column)
+        layout.setSpacing(8)
+        
+        # Processing section
+        processing_section = self.create_excel_processing_section()
+        layout.addWidget(processing_section)
+        
+        layout.addStretch()
+        
+        return column
+    
+    def create_excel_processing_section(self):
+        """Create processing section for Excel Generation"""
+        section = QFrame()
+        section.setObjectName("section")
+        
+        layout = QVBoxLayout(section)
+        layout.setSpacing(0)
+        
+        # Section title
+        title = QLabel("⚙️ Excel Generation")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Subtitle
+        subtitle = QLabel("Generate Excel files from selected PDFs")
+        subtitle.setObjectName("subtitleText")
+        layout.addWidget(subtitle)
+        
+        # Process button
+        self.excel_process_btn = QPushButton("Generate Excel Files")
+        self.excel_process_btn.setObjectName("primaryButton")
+        self.excel_process_btn.clicked.connect(self.process_excel_generation)
+        self.excel_process_btn.setEnabled(False)
+        layout.addWidget(self.excel_process_btn)
+        
+        # Show OCR region button
+        self.excel_show_region_btn = QPushButton("Show Current OCR Region")
+        self.excel_show_region_btn.setObjectName("secondaryButton")
+        self.excel_show_region_btn.clicked.connect(self.show_current_ocr_region)
+        layout.addWidget(self.excel_show_region_btn)
+        
+        # Configure OCR region button
+        self.excel_configure_ocr_btn = QPushButton("Configure OCR Region")
+        self.excel_configure_ocr_btn.setObjectName("primaryButton")
+        self.excel_configure_ocr_btn.clicked.connect(self.configure_ocr_region)
+        layout.addWidget(self.excel_configure_ocr_btn)
+        
+        # Progress bar
+        self.excel_progress_bar = QProgressBar()
+        self.excel_progress_bar.setVisible(False)
+        self.excel_progress_bar.setRange(0, 100)
+        self.excel_progress_bar.setValue(0)
+        layout.addWidget(self.excel_progress_bar)
+        
+        # Status display
+        self.excel_status_label = QLabel("Select output folder and PDF files to begin")
+        self.excel_status_label.setObjectName("infoText")
+        self.excel_status_label.setWordWrap(True)
+        layout.addWidget(self.excel_status_label)
+        
+        return section
+
+
+
 
     
-
-    
-
     
     def create_file_selection_column(self):
         """Create left column with file selection controls"""
@@ -713,7 +1961,7 @@ class DispatchScanningApp(QMainWindow):
         column.setFixedWidth(550)
         
         layout = QVBoxLayout(column)
-        layout.setSpacing(15)
+        layout.setSpacing(8)
         
         # Output folder section
         output_section = self.create_output_folder_section()
@@ -741,7 +1989,7 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(8)
+        layout.setSpacing(0)
         
         # Section title
         title = QLabel("📁 Output Folder")
@@ -775,10 +2023,10 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(8)
+        layout.setSpacing(0)
         
         # Section title
-        title = QLabel("📊 Store Order Excel File")
+        title = QLabel("📊 Store Order File (Excel/CSV)")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
         
@@ -789,7 +2037,7 @@ class DispatchScanningApp(QMainWindow):
         
         # Button row
         btn_layout = QHBoxLayout()
-        self.browse_excel_btn = QPushButton("Select Excel File")
+        self.browse_excel_btn = QPushButton("Select File (Excel/CSV)")
         self.browse_excel_btn.clicked.connect(self.browse_excel_file)
         
         self.clear_excel_btn = QPushButton("Clear")
@@ -816,7 +2064,7 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(8)
+        layout.setSpacing(0)
         
         # Section title
         title = QLabel("📅 Order Picking Date")
@@ -839,7 +2087,7 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(8)
+        layout.setSpacing(0)
         
         # Section title
         title = QLabel("📄 PDF Files to Process")
@@ -872,7 +2120,7 @@ class DispatchScanningApp(QMainWindow):
         column.setObjectName("columnFrame")
         
         layout = QVBoxLayout(column)
-        layout.setSpacing(15)
+        layout.setSpacing(8)
         
         # Main processing section
         processing_section = self.create_main_processing_section()
@@ -896,7 +2144,7 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(15)
+        layout.setSpacing(0)
         
         # Section title
         title = QLabel("🚀 Process PDFs & Add Barcodes")
@@ -909,6 +2157,8 @@ class DispatchScanningApp(QMainWindow):
         self.process_picking_btn.clicked.connect(self.process_picking_dockets)
         self.process_picking_btn.setFixedHeight(45)
         layout.addWidget(self.process_picking_btn)
+        
+
         
         return section
     
@@ -962,10 +2212,11 @@ class DispatchScanningApp(QMainWindow):
         <br>• Column D: Barcode (→ barcode)
         <br>• Column E: Customer Type (→ customer_type)
         <br>• Column F: Quantity (→ quantity)
-        <br><br><b>Optional columns:</b>
         <br>• Column G: Site Name (→ sitename)
         <br>• Column H: Account Code (→ accountcode)
         <br>• Column I: Dispatch Code (→ dispatchcode)
+        <br>• Column J: Route (→ route)
+                                   
         """)
         requirements_text.setObjectName("requirementsText")
         requirements_text.setWordWrap(True)
@@ -1000,24 +2251,35 @@ class DispatchScanningApp(QMainWindow):
     
     # NEW: Excel file handling methods
     def browse_excel_file(self):
-        """Browse for Excel file containing store orders for database upload and barcode generation"""
+        """Browse for Excel or CSV file containing store orders for database upload and barcode generation"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Store Order Excel File (for database upload & barcodes)",
+            "Select Store Order File (Excel or CSV for database upload & barcodes)",
             str(Path.home()),
-            "Excel files (*.xlsx *.xls);;All files (*.*)"
+            "Excel files (*.xlsx *.xls);;CSV files (*.csv);;All files (*.*)"
         )
         if file_path:
             self.selected_excel_file = file_path
             try:
-                # Load Excel file and read column A
-                print(f"📋 Loading Excel file: {file_path}")
-                df = pd.read_excel(file_path)
+                # Determine file type and load accordingly
+                file_extension = Path(file_path).suffix.lower()
+                print(f"📋 Loading file: {file_path} (type: {file_extension})")
+                
+                if file_extension in ['.csv']:
+                    # Load CSV file
+                    df = pd.read_csv(file_path)
+                    file_type = "CSV"
+                elif file_extension in ['.xlsx', '.xls']:
+                    # Load Excel file
+                    df = pd.read_excel(file_path)
+                    file_type = "Excel"
+                else:
+                    raise ValueError(f"Unsupported file type: {file_extension}")
                 
                 if df.empty or len(df.columns) == 0:
-                    raise ValueError("Excel file is empty or has no columns")
+                    raise ValueError(f"{file_type} file is empty or has no columns")
                 
-                print(f"📋 Excel file loaded successfully:")
+                print(f"📋 {file_type} file loaded successfully:")
                 print(f"   - Total rows: {len(df)}")
                 print(f"   - Total columns: {len(df.columns)}")
                 print(f"   - Column names: {list(df.columns)}")
@@ -1038,37 +2300,30 @@ class DispatchScanningApp(QMainWindow):
                 filename = Path(file_path).name
                 self.excel_file_label.setText(f"Selected: {filename} ({len(self.excel_order_numbers)} order numbers)")
                 self.excel_file_label.setObjectName("successText")
-                self.update_status(f"Loaded {len(self.excel_order_numbers)} order numbers from Excel file")
+                self.update_status(f"Loaded {len(self.excel_order_numbers)} order numbers from {file_type} file")
                 
                 # Store the full DataFrame for later use in upload
                 self.excel_dataframe = df
                 
             except Exception as e:
-                print(f"❌ Error reading Excel file: {str(e)}")
+                print(f"❌ Error reading file: {str(e)}")
                 print(f"❌ Error type: {type(e).__name__}")
-                QMessageBox.critical(self, "Excel File Error", f"Error reading Excel file: {str(e)}")
+                QMessageBox.critical(self, "File Error", f"Error reading file: {str(e)}")
                 self.selected_excel_file = ""
                 self.excel_order_numbers = []
                 self.excel_dataframe = None
-                self.excel_file_label.setText("Error reading Excel file")
+                self.excel_file_label.setText("Error reading file")
                 self.excel_file_label.setObjectName("warningText")
     
     def clear_excel_file(self):
-        """Clear selected Excel file"""
+        """Clear selected file (Excel or CSV)"""
         self.selected_excel_file = ""
         self.excel_order_numbers = []
         self.excel_dataframe = None
-        self.excel_file_label.setText("No Excel file selected")
+        self.excel_file_label.setText("No file selected")
         self.excel_file_label.setObjectName("infoText")
-        self.update_status("Excel file cleared")
+        self.update_status("File cleared")
 
-        # Clearing base file invalidates any computed additional diffs
-        self.selected_additional_excel_file = ""
-        self.additional_new_rows_data = []
-        self.additional_new_rows_count = 0
-        if hasattr(self, 'additional_excel_file_label'):
-            self.additional_excel_file_label.setText("No additional Excel file selected")
-            self.additional_excel_file_label.setObjectName("infoText")
     
     # NEW: Output folder handling methods
     def browse_output_folder(self):
@@ -1091,109 +2346,864 @@ class DispatchScanningApp(QMainWindow):
         self.output_folder_label.setObjectName("infoText")
         self.update_status("Output folder cleared - will use default location")
 
-
-
-    # Additional Excel handling methods
-    def browse_additional_excel_file(self):
-        """Browse for an additional Excel file and compute new rows vs initial Excel"""
-        if not self.selected_excel_file:
-            QMessageBox.warning(
-                self,
-                "Select Initial Excel First",
-                "Please select the initial 'Store Order Excel File' first, then choose the additional Excel file to compare."
-            )
+    # Excel Generation file handling methods
+    def browse_excel_output_folder(self):
+        """Browse for output folder for Excel Generation"""
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Output Folder for Excel Generation",
+            str(Path.home())
+        )
+        if folder_path:
+            self.excel_selected_output_folder = folder_path
+            self.excel_output_folder_label.setText(f"Output folder: {folder_path}")
+            self.excel_output_folder_label.setObjectName("successText")
+            self.update_excel_generation_status()
+            self.update_status(f"Excel output folder set to: {folder_path}")
+    
+    def clear_excel_output_folder(self):
+        """Clear selected output folder for Excel Generation"""
+        self.excel_selected_output_folder = ""
+        self.excel_output_folder_label.setText("No output folder selected")
+        self.excel_output_folder_label.setObjectName("infoText")
+        self.update_excel_generation_status()
+        self.update_status("Excel output folder cleared")
+    
+    def browse_excel_pdf_files(self):
+        """Browse for PDF files for Excel Generation"""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select PDF Files for Excel Generation",
+            str(Path.home()),
+            "PDF files (*.pdf);;All files (*.*)"
+        )
+        if file_paths:
+            self.excel_selected_pdf_files = file_paths
+            file_count = len(file_paths)
+            if file_count == 1:
+                self.excel_pdf_files_label.setText(f"1 PDF file selected: {Path(file_paths[0]).name}")
+            else:
+                self.excel_pdf_files_label.setText(f"{file_count} PDF files selected")
+            self.excel_pdf_files_label.setObjectName("successText")
+            self.update_excel_generation_status()
+            self.update_status(f"Selected {file_count} PDF files for Excel generation")
+    
+    def clear_excel_pdf_files(self):
+        """Clear selected PDF files for Excel Generation"""
+        self.excel_selected_pdf_files = []
+        self.excel_pdf_files_label.setText("No PDF files selected")
+        self.excel_pdf_files_label.setObjectName("infoText")
+        self.update_excel_generation_status()
+        self.update_status("Excel PDF files cleared")
+    
+    def update_excel_generation_status(self):
+        """Update the Excel Generation status and enable/disable process button"""
+        has_output_folder = hasattr(self, 'excel_selected_output_folder') and self.excel_selected_output_folder
+        has_pdf_files = hasattr(self, 'excel_selected_pdf_files') and self.excel_selected_pdf_files
+        
+        if has_output_folder and has_pdf_files:
+            self.excel_process_btn.setEnabled(True)
+            self.excel_status_label.setText("Ready to generate Excel files")
+            self.excel_status_label.setObjectName("successText")
+        else:
+            self.excel_process_btn.setEnabled(False)
+            missing_items = []
+            if not has_output_folder:
+                missing_items.append("output folder")
+            if not has_pdf_files:
+                missing_items.append("PDF files")
+            self.excel_status_label.setText(f"Select {', '.join(missing_items)} to begin")
+            self.excel_status_label.setObjectName("infoText")
+    
+    def process_excel_generation(self):
+        """Process Excel generation from selected PDF files"""
+        if not hasattr(self, 'excel_selected_output_folder') or not self.excel_selected_output_folder:
+            QMessageBox.warning(self, "Missing Output Folder", "Please select an output folder first.")
             return
+        
+        if not hasattr(self, 'excel_selected_pdf_files') or not self.excel_selected_pdf_files:
+            QMessageBox.warning(self, "Missing PDF Files", "Please select PDF files to process first.")
+            return
+        
+        try:
+            # Check if OCR setup is completed
+            if not self.check_ocr_setup():
+                self.excel_status_label.setText("OCR setup cancelled or failed")
+                self.excel_status_label.setObjectName("warningText")
+                self.excel_process_btn.setEnabled(True)
+                return
+            
+            # Update status and show progress bar
+            self.excel_status_label.setText("Processing Excel generation...")
+            self.excel_status_label.setObjectName("infoText")
+            self.excel_process_btn.setEnabled(False)
+            self.excel_progress_bar.setVisible(True)
+            self.excel_progress_bar.setValue(0)
+            self.update_status("Starting Excel generation process...")
+            
+            # Process each PDF file
+            debug_results = []
+            # Get all configured regions
+            configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
+            
+            # Calculate total work (PDFs * pages * regions)
+            total_pdfs = len(self.excel_selected_pdf_files)
+            total_work = 0
+            pdf_page_counts = []
+            
+            for pdf_path in self.excel_selected_pdf_files:
+                try:
+                    pdf_document = fitz.open(pdf_path)
+                    page_count = len(pdf_document)
+                    pdf_page_counts.append(page_count)
+                    total_work += page_count * len(configured_regions)
+                    pdf_document.close()
+                except Exception as e:
+                    pdf_page_counts.append(0)
+                    print(f"Error counting pages in {pdf_path}: {e}")
+            
+            current_work = 0
+            
+            for pdf_index, pdf_path in enumerate(self.excel_selected_pdf_files):
+                self.update_status(f"Processing: {Path(pdf_path).name}")
+                
+                try:
+                    # Open PDF with PyMuPDF
+                    pdf_document = fitz.open(pdf_path)
+                    
+                    # Process each page
+                    for page_num in range(len(pdf_document)):
+                        page = pdf_document[page_num]
+                        
+                        # Process each configured region using direct text extraction
+                        for region in configured_regions:
+                            coordinates = region['coordinates']
+                            
+                            # Extract text directly from the specified coordinates using PyMuPDF
+                            # coordinates are (x1, y1, x2, y2)
+                            rect = fitz.Rect(coordinates[0], coordinates[1], coordinates[2], coordinates[3])
+                            
+                            # Try precise text extraction from exact coordinates
+                            extracted_text = self.extract_text_from_exact_coordinates(page, rect)
+                            
+                            # If no text found with direct extraction, try OCR as fallback
+                            if not extracted_text.strip():
+                                try:
+                                    # Render the specific region as image for OCR fallback
+                                    mat = fitz.Matrix(3.0, 3.0)  # Higher resolution for better OCR
+                                    pix = page.get_pixmap(matrix=mat, clip=rect)
+                                    img_data = pix.tobytes("png")
+                                    image = Image.open(io.BytesIO(img_data))
+                                    
+                                    # Try OCR with multiple PSM modes
+                                    psm_modes = [6, 3, 7, 8, 13]
+                                    for psm_mode in psm_modes:
+                                        try:
+                                            ocr_text = pytesseract.image_to_string(image, config=f'--psm {psm_mode}')
+                                            if ocr_text.strip():
+                                                extracted_text = ocr_text
+                                                self.processing_thread.progress_signal.emit(
+                                                    f"Used OCR fallback for {region['name']} on page {page_num + 1}"
+                                                )
+                                                break
+                                        except Exception:
+                                            continue
+                                except Exception as ocr_error:
+                                    self.processing_thread.progress_signal.emit(
+                                        f"OCR fallback failed for {region['name']}: {str(ocr_error)}"
+                                    )
+                            
+                            # Clean up the text for better accuracy
+                            cleaned_text = self.clean_extracted_text(extracted_text)
+                            
+                            # Store results
+                            result = {
+                                'file': Path(pdf_path).name,
+                                'page': page_num + 1,
+                                'region': region['name'],
+                                'color': region['color'],
+                                'coordinates': coordinates,
+                                'extracted_text': cleaned_text,
+                                'raw_text': extracted_text
+                            }
+                            debug_results.append(result)
+                            
+                            # Update progress
+                            current_work += 1
+                            if total_work > 0:
+                                progress = int((current_work / total_work) * 100)
+                                self.excel_progress_bar.setValue(progress)
+                                self.excel_status_label.setText(f"Processing: {Path(pdf_path).name} - Page {page_num + 1} - Region {region['name']} ({progress}%)")
+                            
+                            # Update status with detailed debug info
+                            self.update_status(f"Page {page_num + 1}, {region['name']}: '{cleaned_text}'")
+                            
+                            # Debug: Show what was extracted from Region 4 specifically
+                            if 'Region 4' in region['name']:
+                                self.update_status(f"DEBUG - Region 4 text: '{cleaned_text}'")
+                                if 'Total Items Delivered:' in cleaned_text:
+                                    self.update_status(f"DEBUG - TRIGGER TEXT FOUND in Region 4!")
+                                else:
+                                    self.update_status(f"DEBUG - No trigger text found in Region 4")
+                    
+                    # Close the PDF document
+                    pdf_document.close()
+                        
+                except Exception as e:
+                    error_result = {
+                        'file': Path(pdf_path).name,
+                        'error': str(e),
+                        'coordinates': coordinates
+                    }
+                    debug_results.append(error_result)
+                    self.update_status(f"Error processing {Path(pdf_path).name}: {str(e)}")
+            
+            # Generate Excel files
+            self.generate_excel_files(debug_results)
+            
+            # Reset status
+            self.excel_status_label.setText("Excel generation completed")
+            self.excel_status_label.setObjectName("successText")
+            self.excel_process_btn.setEnabled(True)
+            self.excel_progress_bar.setVisible(False)
+            self.update_status("Excel generation process completed")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Excel Generation Error", f"An error occurred during Excel generation:\n{str(e)}")
+            self.excel_status_label.setText("Excel generation failed")
+            self.excel_status_label.setObjectName("errorText")
+            self.excel_process_btn.setEnabled(True)
+            self.excel_progress_bar.setVisible(False)
+            self.update_status(f"Excel generation failed: {str(e)}")
 
+
+    def check_ocr_setup(self):
+        """Check if OCR setup is completed, prompt for setup if not"""
+        configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
+        if not self.ocr_setup_completed or not configured_regions:
+            if not self.excel_selected_pdf_files:
+                QMessageBox.warning(
+                    self,
+                    "No PDF Files Selected",
+                    "Please select PDF files first before setting up OCR coordinates."
+                )
+                return False
+            
+            # Use the first PDF file for setup
+            setup_pdf = self.excel_selected_pdf_files[0]
+            
+            reply = QMessageBox.question(
+                self,
+                "First Time Setup Required",
+                "OCR coordinates need to be configured for the first time.\n\n"
+                "This will open a dialog where you can visually select the region "
+                "where OCR should extract text (e.g., 'Route Cork 1').\n\n"
+                "Would you like to proceed with setup?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            
+            if reply == QMessageBox.Yes:
+                # Open coordinate selector dialog
+                dialog = CoordinateSelectorDialog(setup_pdf, self)
+                if dialog.exec() == QDialog.Accepted:
+                    # Reload configuration
+                    self.load_ocr_config()
+                    return True
+                else:
+                    return False
+            else:
+                return False
+        
+        return True
+
+    def quick_ocr_setup(self):
+        """Quick OCR setup - select a PDF file and configure OCR region"""
+        # First, let user select a PDF file
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Additional Store Order Excel File (late orders)",
+            "Select PDF File for OCR Configuration",
             str(Path.home()),
-            "Excel files (*.xlsx *.xls);;All files (*.*)"
+            "PDF files (*.pdf);;All files (*.*)"
         )
+        
         if not file_path:
+            return  # User cancelled
+        
+        # Show current coordinates if they exist
+        configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
+        current_coords = ""
+        if configured_regions:
+            region_list = "\n".join([f"• {region['name']} ({region['color'].title()}): {region['coordinates']}" 
+                                    for region in configured_regions])
+            current_coords = f"\n\nCurrent regions:\n{region_list}"
+        
+        reply = QMessageBox.question(
+            self,
+            "Configure OCR Region",
+            f"Selected PDF: {Path(file_path).name}\n\n"
+            f"This will open a dialog where you can visually select the region "
+            f"where OCR should extract text (e.g., 'Route Cork 1').\n\n"
+            f"You can draw a rectangle around the text area to set the coordinates.{current_coords}\n\n"
+            f"Would you like to proceed?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        
+        if reply == QMessageBox.Yes:
+            # Open multi-region coordinate selector dialog
+            dialog = MultiRegionCoordinateSelectorDialog(file_path, self)
+            if dialog.exec() == QDialog.Accepted:
+                # Reload configuration
+                self.load_ocr_config()
+                
+                # Update status
+                if self.ocr_coordinates:
+                    self.excel_status_label.setText(f"OCR region configured: {self.ocr_coordinates}")
+                    self.excel_status_label.setObjectName("successText")
+                    self.update_status(f"OCR coordinates updated: {self.ocr_coordinates}")
+                    
+                    QMessageBox.information(
+                        self,
+                        "Configuration Complete",
+                        f"OCR region has been configured successfully!\n\n"
+                        f"Coordinates: {self.ocr_coordinates}\n\n"
+                        f"You can now select your PDF files for processing and use "
+                        f"'Show Current OCR Region' to verify the selection."
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Configuration Failed",
+                        "OCR coordinates were not saved. Please try again."
+                    )
+
+    def configure_ocr_region(self):
+        """Configure OCR region by opening PDF and allowing visual selection"""
+        if not self.excel_selected_pdf_files:
+            QMessageBox.warning(
+                self,
+                "No PDF Files Selected",
+                "Please select PDF files first before configuring OCR region."
+            )
             return
+        
+        # Use the first PDF file for configuration
+        setup_pdf = self.excel_selected_pdf_files[0]
+        
+        # Show current coordinates if they exist
+        configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
+        current_coords = ""
+        if configured_regions:
+            region_list = "\n".join([f"• {region['name']} ({region['color'].title()}): {region['coordinates']}" 
+                                    for region in configured_regions])
+            current_coords = f"\n\nCurrent regions:\n{region_list}"
+        
+        reply = QMessageBox.question(
+            self,
+            "Configure OCR Region",
+            f"This will open a dialog where you can visually select the region "
+            f"where OCR should extract text (e.g., 'Route Cork 1').\n\n"
+            f"You can draw a rectangle around the text area to set the coordinates.{current_coords}\n\n"
+            f"Would you like to proceed?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        
+        if reply == QMessageBox.Yes:
+            # Open multi-region coordinate selector dialog
+            dialog = MultiRegionCoordinateSelectorDialog(setup_pdf, self)
+            if dialog.exec() == QDialog.Accepted:
+                # Reload configuration
+                self.load_ocr_config()
+                
+                # Update status
+                configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
+                if configured_regions:
+                    region_count = len(configured_regions)
+                    self.excel_status_label.setText(f"OCR regions configured: {region_count} regions")
+                    self.excel_status_label.setObjectName("successText")
+                    self.update_status(f"OCR regions updated: {region_count} regions configured")
+                    
+                    QMessageBox.information(
+                        self,
+                        "Configuration Complete",
+                        f"OCR regions have been configured successfully!\n\n"
+                        f"Configured {region_count} regions:\n" +
+                        "\n".join([f"• {region['name']} ({region['color'].title()}): {region['coordinates']}" 
+                                  for region in configured_regions]) +
+                        f"\n\nYou can now process your PDF files or use 'Show Current OCR Region' "
+                        f"to verify the selections."
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Configuration Failed",
+                        "OCR regions were not saved. Please try again."
+                    )
 
-        self.selected_additional_excel_file = file_path
+    def show_current_ocr_region(self):
+        """Show the current OCR region on a PDF"""
+        configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
+        if not configured_regions:
+            QMessageBox.information(
+                self,
+                "No OCR Regions Set",
+                "No OCR regions have been configured yet.\n\n"
+                "Please run the first-time setup by clicking 'Configure OCR Region' "
+                "and following the setup process."
+            )
+            return
+        
+        if not self.excel_selected_pdf_files:
+            QMessageBox.warning(
+                self,
+                "No PDF Files Selected",
+                "Please select PDF files first to view the OCR region."
+            )
+            return
+        
         try:
-            # Compute new rows
-            new_rows = self.compute_new_rows_between_excels(self.selected_excel_file, self.selected_additional_excel_file)
-            self.additional_new_rows_data = new_rows
-            self.additional_new_rows_count = len(new_rows)
-
-            filename = Path(file_path).name
-            if self.additional_new_rows_count > 0:
-                self.additional_excel_file_label.setText(
-                    f"Selected: {filename} — {self.additional_new_rows_count} new rows will be uploaded"
+            # Use the first PDF file
+            pdf_path = self.excel_selected_pdf_files[0]
+            
+            # Create a dialog to show the OCR region
+            region_dialog = QDialog(self)
+            region_dialog.setWindowTitle("Current OCR Region")
+            region_dialog.setModal(True)
+            region_dialog.resize(1200, 900)
+            
+            layout = QVBoxLayout(region_dialog)
+            
+            # Instructions
+            region_count = len(configured_regions)
+            instructions = QLabel(
+                f"Current OCR Regions: {region_count} regions configured\n"
+                "The colored rectangles show exactly where OCR will extract text from.\n"
+                "Red = Region 1, Blue = Region 2, Green = Region 3, Orange = Region 4, Purple = Region 5"
+            )
+            instructions.setObjectName("sectionTitle")
+            instructions.setWordWrap(True)
+            layout.addWidget(instructions)
+            
+            # Graphics view for PDF display
+            graphics_view = QGraphicsView()
+            layout.addWidget(graphics_view)
+            
+            # Scene for graphics
+            scene = QGraphicsScene()
+            graphics_view.setScene(scene)
+            
+            # Load PDF and display with OCR region highlighted
+            pdf_document = fitz.open(pdf_path)
+            page = pdf_document[0]
+            
+            # Convert to image
+            mat = fitz.Matrix(1.0, 1.0)  # Normal size for better overview
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            # Convert to QPixmap
+            pixmap = QPixmap()
+            pixmap.loadFromData(img_data)
+            
+            # Add to scene
+            pixmap_item = QGraphicsPixmapItem(pixmap)
+            scene.addItem(pixmap_item)
+            
+            # Add all OCR region rectangles
+            scale_factor = 1.0  # Same as matrix
+            for region in configured_regions:
+                x1, y1, x2, y2 = region['coordinates']
+                rect = QRectF(
+                    x1 / scale_factor, 
+                    y1 / scale_factor, 
+                    (x2 - x1) / scale_factor, 
+                    (y2 - y1) / scale_factor
                 )
-                self.additional_excel_file_label.setObjectName("successText")
-                self.update_status(f"Computed {self.additional_new_rows_count} new rows from additional Excel file")
-            else:
-                self.additional_excel_file_label.setText(
-                    f"Selected: {filename} — 0 new rows (no differences found)"
-                )
-                self.additional_excel_file_label.setObjectName("warningText")
-                self.update_status("No new rows found in additional Excel file")
-
+                
+                # Set color based on region
+                if region['color'] == 'red':
+                    pen_color = QColor(255, 0, 0, 255)
+                elif region['color'] == 'blue':
+                    pen_color = QColor(0, 0, 255, 255)
+                elif region['color'] == 'green':
+                    pen_color = QColor(0, 255, 0, 255)
+                elif region['color'] == 'orange':
+                    pen_color = QColor(255, 165, 0, 255)  # Orange color
+                elif region['color'] == 'purple':
+                    pen_color = QColor(128, 0, 128, 255)  # Purple color
+                else:
+                    pen_color = QColor(128, 128, 128, 255)
+                
+                # Create rectangle for OCR region
+                rect_item = scene.addRect(rect, QPen(pen_color, 3))
+                rect_item.setZValue(1)  # Above the image
+                
+                # Add text label
+                text_item = scene.addText(region['name'], QFont("Arial", 12, QFont.Bold))
+                text_item.setDefaultTextColor(pen_color)
+                text_item.setPos(rect.x(), rect.y() - 20)
+                text_item.setZValue(2)
+            
+            pdf_document.close()
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            
+            # Reconfigure button
+            reconfigure_btn = QPushButton("Reconfigure Coordinates")
+            reconfigure_btn.clicked.connect(lambda: self.reconfigure_ocr_coordinates(region_dialog))
+            reconfigure_btn.setObjectName("primaryButton")
+            
+            # Close button
+            close_btn = QPushButton("Close")
+            close_btn.clicked.connect(region_dialog.accept)
+            
+            button_layout.addWidget(reconfigure_btn)
+            button_layout.addStretch()
+            button_layout.addWidget(close_btn)
+            
+            layout.addLayout(button_layout)
+            
+            # Show dialog
+            region_dialog.exec()
+            
         except Exception as e:
-            QMessageBox.critical(self, "Additional Excel Error", f"Error comparing Excel files: {str(e)}")
-            self.selected_additional_excel_file = ""
-            self.additional_new_rows_data = []
-            self.additional_new_rows_count = 0
-            self.additional_excel_file_label.setText("Error reading additional Excel file")
-            self.additional_excel_file_label.setObjectName("warningText")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error showing OCR region: {str(e)}"
+            )
 
-    def clear_additional_excel_file(self):
-        """Clear selected additional Excel file and any computed diffs"""
-        self.selected_additional_excel_file = ""
-        self.additional_new_rows_data = []
-        self.additional_new_rows_count = 0
-        self.additional_excel_file_label.setText("No additional Excel file selected")
-        self.additional_excel_file_label.setObjectName("infoText")
-        self.update_status("Additional Excel file cleared")
+    def reconfigure_ocr_coordinates(self, parent_dialog):
+        """Reconfigure OCR coordinates"""
+        parent_dialog.accept()  # Close the current dialog
+        
+        if not self.excel_selected_pdf_files:
+            QMessageBox.warning(
+                self,
+                "No PDF Files Selected",
+                "Please select PDF files first before reconfiguring OCR coordinates."
+            )
+            return
+        
+        # Use the first PDF file for setup
+        setup_pdf = self.excel_selected_pdf_files[0]
+        
+        # Open multi-region coordinate selector dialog
+        dialog = MultiRegionCoordinateSelectorDialog(setup_pdf, self)
+        if dialog.exec() == QDialog.Accepted:
+            # Reload configuration
+            self.load_ocr_config()
+            QMessageBox.information(
+                self,
+                "Configuration Updated",
+                "OCR regions have been updated successfully!"
+            )
 
-    def compute_new_rows_between_excels(self, base_excel_path: str, additional_excel_path: str):
-        """Return list of dict rows that exist in additional Excel but not in base Excel.
+    def display_debug_results(self, debug_results):
+        """Display OCR debug results in a dialog"""
+        if not debug_results:
+            QMessageBox.information(self, "Debug Results", "No results to display.")
+            return
+        
+        # Create a dialog to display results
+        dialog = QDialog(self)
+        dialog.setWindowTitle("OCR Debug Results")
+        dialog.setModal(True)
+        dialog.resize(800, 600)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Title
+        title = QLabel("OCR Extraction Results")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Create text area for results
+        text_area = QTextEdit()
+        text_area.setReadOnly(True)
+        text_area.setFont(QFont("Consolas", 10))
+        
+        # Format results
+        result_text = "OCR Debug Results\n"
+        result_text += "=" * 50 + "\n\n"
+        result_text += f"Coordinates: {debug_results[0]['coordinates']}\n"
+        result_text += f"Total files processed: {len(set(r.get('file', 'Unknown') for r in debug_results))}\n"
+        result_text += f"Total pages processed: {len([r for r in debug_results if 'page' in r])}\n\n"
+        
+        for i, result in enumerate(debug_results, 1):
+            result_text += f"Result {i}:\n"
+            result_text += f"  File: {result.get('file', 'Unknown')}\n"
+            
+            if 'error' in result:
+                result_text += f"  Error: {result['error']}\n"
+            else:
+                result_text += f"  Page: {result.get('page', 'Unknown')}\n"
+                result_text += f"  Extracted Text: '{result.get('extracted_text', '')}'\n"
+                result_text += f"  Raw Text: '{result.get('raw_text', '')}'\n"
+            
+            result_text += "\n"
+        
+        text_area.setPlainText(result_text)
+        layout.addWidget(text_area)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        # Show dialog
+        dialog.exec()
 
-        Comparison is done on normalized full-row content across intersecting columns.
-        Preserves the order of the additional Excel file.
-        """
-        # Read both files
-        base_df = pd.read_excel(base_excel_path)
-        add_df = pd.read_excel(additional_excel_path)
+    def generate_excel_files(self, debug_results):
+        """Generate Excel files with OCR results in specific columns"""
+        if not debug_results:
+            QMessageBox.information(self, "No Results", "No OCR results to generate Excel files from.")
+            return
+        
+        try:
+            # Create a new workbook
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "OCR Results"
+            
+            # Set up headers in the correct columns according to the required format
+            # Column A: Order Number (→ ordernumber)
+            # Column B: Item Code (→ itemcode)  
+            # Column C: Product Description (→ product_description)
+            # Column D: Barcode (→ barcode)
+            # Column E: Customer Type (→ customer_type)
+            # Column F: Quantity (→ quantity)
+            # Column G: Site Name (→ sitename)
+            # Column H: Account Code (→ accountcode)
+            # Column I: Dispatch Code (→ dispatchcode)
+            # Column J: Route (→ route)
+            ws.cell(row=1, column=1, value="Order Number").font = Font(bold=True)  # Column A
+            ws.cell(row=1, column=2, value="Item Code").font = Font(bold=True)  # Column B
+            ws.cell(row=1, column=3, value="Product Description").font = Font(bold=True)  # Column C
+            ws.cell(row=1, column=4, value="Barcode").font = Font(bold=True)  # Column D
+            ws.cell(row=1, column=5, value="Customer Type").font = Font(bold=True)  # Column E
+            ws.cell(row=1, column=6, value="Quantity").font = Font(bold=True)  # Column F
+            ws.cell(row=1, column=7, value="Site Name").font = Font(bold=True)  # Column G
+            ws.cell(row=1, column=8, value="Account Code").font = Font(bold=True)  # Column H
+            ws.cell(row=1, column=9, value="Dispatch Code").font = Font(bold=True)  # Column I
+            ws.cell(row=1, column=10, value="Route").font = Font(bold=True)  # Column J
+            
+            # Style all headers
+            for col in range(1, 11):  # Style all columns A through J
+                cell = ws.cell(row=1, column=col)
+                cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+                cell.alignment = Alignment(horizontal="center")
+            
+            # Group results by file and page, but only include pages with "Total Items Delivered:" in Region 4
+            results_by_file_page = {}
+            pages_to_skip = set()
+            
+            # First pass: identify pages that should be skipped (no "Total Items Delivered:" in Region 4)
+            for result in debug_results:
+                if 'error' in result:
+                    continue
+                    
+                file_name = result.get('file', 'Unknown')
+                page_num = result.get('page', 1)
+                region_name = result.get('region', 'Unknown')
+                extracted_text = result.get('extracted_text', '')
+                
+                key = (file_name, page_num)
+                
+                # Check if this is Region 4 and if it contains the trigger text
+                if 'Region 4' in region_name:
+                    # Clean the extracted text for better matching
+                    cleaned_text = extracted_text.strip()
+                    if 'Total Items Delivered:' not in cleaned_text:
+                        pages_to_skip.add(key)
+                        self.update_status(f"Skipping page {page_num} - no 'Total Items Delivered:' found in Region 4. Found: '{cleaned_text}'")
+                    else:
+                        self.update_status(f"Processing page {page_num} - 'Total Items Delivered:' found in Region 4")
+            
+            # Second pass: collect data only from pages that should be processed
+            for result in debug_results:
+                if 'error' in result:
+                    continue
+                    
+                file_name = result.get('file', 'Unknown')
+                page_num = result.get('page', 1)
+                region_name = result.get('region', 'Unknown')
+                extracted_text = result.get('extracted_text', '')
+                
+                key = (file_name, page_num)
+                
+                # Skip this page if it doesn't have the trigger text
+                if key in pages_to_skip:
+                    continue
+                
+                if key not in results_by_file_page:
+                    results_by_file_page[key] = {
+                        'file': file_name,
+                        'page': page_num,
+                        'region_1': '',  # Column J
+                        'region_2': '',  # Column A  
+                        'region_3': '',  # Column G
+                        'region_4': ''   # For trigger text verification
+                    }
+                
+                # Map regions to columns based on new requirements
+                if 'Region 1' in region_name:
+                    results_by_file_page[key]['region_1'] = extracted_text
+                elif 'Region 2' in region_name:
+                    results_by_file_page[key]['region_2'] = extracted_text
+                elif 'Region 3' in region_name:
+                    results_by_file_page[key]['region_3'] = extracted_text
+                elif 'Region 4' in region_name:
+                    results_by_file_page[key]['region_4'] = extracted_text
+            
+            # Write data to Excel in the correct columns according to the required format
+            row = 2
+            for (file_name, page_num), data in results_by_file_page.items():
+                # Only write rows for pages that have the trigger text and contain data from regions 1, 2, 3
+                if data['region_4']:  # Ensure Region 4 had the trigger text
+                    # Clean ordernumber (Region 2) - keep only letters and numbers
+                    cleaned_ordernumber = re.sub(r'[^a-zA-Z0-9]', '', data['region_2'])
+                    
+                    # Populate all required columns according to the format
+                    ws.cell(row=row, column=1, value=cleaned_ordernumber)  # Column A: Order Number (→ ordernumber)
+                    ws.cell(row=row, column=2, value="")  # Column B: Item Code (→ itemcode) - empty for now
+                    ws.cell(row=row, column=3, value="")  # Column C: Product Description (→ product_description) - empty for now
+                    ws.cell(row=row, column=4, value="")  # Column D: Barcode (→ barcode) - empty for now
+                    ws.cell(row=row, column=5, value="")  # Column E: Customer Type (→ customer_type) - empty for now
+                    ws.cell(row=row, column=6, value="")  # Column F: Quantity (→ quantity) - empty for now
+                    ws.cell(row=row, column=7, value=data['region_3'])  # Column G: Site Name (→ sitename) - Region 3
+                    ws.cell(row=row, column=8, value="")  # Column H: Account Code (→ accountcode) - empty for now
+                    ws.cell(row=row, column=9, value="")  # Column I: Dispatch Code (→ dispatchcode) - empty for now
+                    ws.cell(row=row, column=10, value=data['region_1'])  # Column J: Route (→ route) - Region 1
+                    
+                    row += 1
+                    self.update_status(f"Added row for page {page_num}: Order Number='{cleaned_ordernumber}', Site Name='{data['region_3']}', Route='{data['region_1']}'")
+            
+            # Auto-adjust column widths
+            for column in ws.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                ws.column_dimensions[column_letter].width = adjusted_width
+            
+            # Generate filename with timestamp
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            excel_filename = f"OCR_Results_{timestamp}.xlsx"
+            excel_path = Path(self.excel_selected_output_folder) / excel_filename
+            
+            # Save the workbook
+            wb.save(excel_path)
+            
+            # Upload the generated Excel file to Supabase if available
+            if SUPABASE_AVAILABLE:
+                try:
+                    self.processing_thread.progress_signal.emit("📤 Uploading generated Excel file to Supabase...")
+                    
+                    # Read the generated Excel file
+                    df_generated = pd.read_excel(excel_path)
+                    generated_data = df_generated.to_dict('records')
+                    
+                    # Upload to Supabase
+                    success = upload_store_orders_from_excel(generated_data, excel_filename)
+                    if success:
+                        self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded generated Excel file to Supabase!")
+                    else:
+                        self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload generated Excel file to Supabase")
+                except Exception as e:
+                    self.processing_thread.progress_signal.emit(f"⚠️ Error uploading generated Excel file: {str(e)}")
+            else:
+                self.processing_thread.progress_signal.emit("⚠️ Supabase not available - Excel file saved locally only")
+            
+            # Show success message
+            total_pages_scanned = len(set((r.get('file', ''), r.get('page', 0)) for r in debug_results if 'error' not in r))
+            pages_processed = len(results_by_file_page)
+            pages_skipped = total_pages_scanned - pages_processed
+            
+            QMessageBox.information(
+                self,
+                "Excel File Generated",
+                f"Excel file has been generated successfully!\n\n"
+                f"File: {excel_filename}\n"
+                f"Location: {self.excel_selected_output_folder}\n\n"
+                f"Processing Results:\n"
+                f"• {total_pages_scanned} pages scanned\n"
+                f"• {pages_processed} pages processed (contained 'Total Items Delivered:')\n"
+                f"• {pages_skipped} pages skipped (no trigger text)\n\n"
+                f"Column Mapping:\n"
+                f"• Region 1 (Red) → Column H (route)\n"
+                f"• Region 2 (Blue) → Column A (ordernumber)\n"
+                f"• Region 3 (Green) → Column E (sitename)"
+            )
+            
+            self.update_status(f"Excel file generated: {excel_filename}")
+            
+            # Final summary
+            self.update_status(f"STRICT RULE APPLIED: Only pages with 'Total Items Delivered:' in Region 4 were processed")
+            self.update_status(f"Final result: {pages_processed} pages processed, {pages_skipped} pages skipped")
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Excel Generation Error",
+                f"Failed to generate Excel file:\n\n{str(e)}"
+            )
+            self.update_status(f"Excel generation failed: {str(e)}")
+    
+    def add_more_orders(self):
+        """Create in-app table for user to add more orders"""
+        try:
+            # Create and show the order entry dialog
+            dialog = OrderEntryDialog(self)
+            if dialog.exec() == QDialog.Accepted:
+                # Get the data from the dialog
+                order_data = dialog.get_order_data()
+                if order_data:
+                    # Convert to DataFrame format expected by the upload function
+                    df = pd.DataFrame(order_data)
+                    
+                    # Get desktop path for easy access
+                    desktop_path = str(Path.home() / "Desktop")
+                    template_path = Path(desktop_path) / f"orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                    
+                    # Save the filled template
+                    df.to_excel(template_path, index=False)
+                    
+                    # Show success message
+                    QMessageBox.information(
+                        self,
+                        "Orders Saved Successfully",
+                        f"Your orders have been saved to:\n{template_path}\n\n"
+                        "You can now use 'Select Excel File' to upload this file."
+                    )
+                    
+                    # Update status
+                    self.update_status(f"Orders saved to: {template_path}")
+                else:
+                    QMessageBox.information(
+                        self,
+                        "No Orders Added",
+                        "No orders were added to the table."
+                    )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error creating order entry table: {str(e)}"
+            )
+            self.update_status("Failed to create order entry table")
+    
 
-        if base_df.empty:
-            # If base is empty, everything is new
-            return add_df.to_dict('records')
-
-        # Align columns: use intersection to avoid mismatches
-        common_cols = [c for c in add_df.columns if c in set(base_df.columns)]
-        if not common_cols:
-            # If no common columns, treat all as new to avoid silent drops
-            return add_df.to_dict('records')
-
-        def normalize_value(v):
-            if pd.isna(v):
-                return ""
-            # Keep string form for stable comparison
-            return str(v).strip().lower()
-
-        def row_signature(series_like):
-            # Signature built from common columns only, sorted by column name for determinism
-            items = []
-            for col in sorted(common_cols):
-                items.append((col.lower(), normalize_value(series_like[col] if col in series_like else None)))
-            return tuple(items)
-
-        base_signatures = set()
-        for _, row in base_df.iterrows():
-            base_signatures.add(row_signature(row))
-
-        new_rows = []
-        for _, row in add_df.iterrows():
-            if row_signature(row) not in base_signatures:
-                new_rows.append({k: row[k] for k in add_df.columns})
-
-        return new_rows
     
 
     
@@ -1304,6 +3314,155 @@ class DispatchScanningApp(QMainWindow):
             else:
                 QMessageBox.critical(self, "Processing Error", f"Error during picking dockets processing: {error_msg}")
 
+    def generate_ocr_variants(self, order_id):
+        """
+        Generate common OCR variants of an order ID to handle character recognition errors
+        """
+        variants = [order_id]  # Include original
+        
+        # Common OCR character substitutions
+        substitutions = {
+            '0': ['O', 'o', 'Q', 'D'],
+            'O': ['0', 'o', 'Q', 'D'],
+            '1': ['l', 'I', '|', 'i'],
+            'l': ['1', 'I', '|', 'i'],
+            'I': ['1', 'l', '|', 'i'],
+            '5': ['S', 's'],
+            'S': ['5', 's'],
+            '8': ['B', 'b'],
+            'B': ['8', 'b'],
+            '6': ['G', 'g'],
+            'G': ['6', 'g'],
+            '2': ['Z', 'z'],
+            'Z': ['2', 'z'],
+            '9': ['g', 'q'],
+            'g': ['9', 'q'],
+            'q': ['9', 'g'],
+            'C': ['c', 'G'],
+            'c': ['C', 'G'],
+            'P': ['p', 'R'],
+            'p': ['P', 'R'],
+            'R': ['P', 'p'],
+            'U': ['u', 'V'],
+            'u': ['U', 'V'],
+            'V': ['U', 'u'],
+            'N': ['n', 'M'],
+            'n': ['N', 'M'],
+            'M': ['N', 'n'],
+            'K': ['k', 'X'],
+            'k': ['K', 'X'],
+            'X': ['K', 'k'],
+            'F': ['f', 'E'],
+            'f': ['F', 'E'],
+            'E': ['F', 'f'],
+            'T': ['t', 'Y'],
+            't': ['T', 'Y'],
+            'Y': ['T', 't'],
+            'W': ['w', 'VV'],
+            'w': ['W', 'VV'],
+            'H': ['h', 'A'],
+            'h': ['H', 'A'],
+            'A': ['H', 'h'],
+            'J': ['j', 'I'],
+            'j': ['J', 'I'],
+            'L': ['l', 'I'],
+            'D': ['d', 'O'],
+            'd': ['D', 'O']
+        }
+        
+        # Generate variants by substituting each character
+        for i, char in enumerate(order_id):
+            if char in substitutions:
+                for sub in substitutions[char]:
+                    variant = order_id[:i] + sub + order_id[i+1:]
+                    if variant not in variants:
+                        variants.append(variant)
+        
+        # Generate variants with missing characters (common OCR issue)
+        for i in range(len(order_id)):
+            variant = order_id[:i] + order_id[i+1:]
+            if variant not in variants:
+                variants.append(variant)
+        
+        # Generate variants with extra characters (common OCR issue)
+        for i in range(len(order_id) + 1):
+            for char in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789':
+                variant = order_id[:i] + char + order_id[i:]
+                if variant not in variants:
+                    variants.append(variant)
+        
+        return variants
+
+    def clean_extracted_text(self, text):
+        """
+        Clean extracted text to improve accuracy and readability
+        """
+        if not text:
+            return ""
+        
+        # Basic cleaning
+        cleaned = text.strip()
+        
+        # Remove extra whitespace and normalize line breaks
+        cleaned = ' '.join(cleaned.split())
+        
+        # Remove common OCR artifacts and control characters
+        cleaned = cleaned.replace('\x00', '')  # Null bytes
+        cleaned = cleaned.replace('\r', ' ')   # Carriage returns
+        cleaned = cleaned.replace('\n', ' ')   # Line breaks
+        cleaned = cleaned.replace('\t', ' ')   # Tabs
+        
+        # Remove multiple consecutive spaces
+        import re
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        
+        # Remove leading/trailing whitespace again
+        cleaned = cleaned.strip()
+        
+        return cleaned
+
+    def extract_text_from_exact_coordinates(self, page, rect):
+        """
+        Extract text from exact coordinates, filtering out any text outside the specified rectangle
+        """
+        try:
+            # Get all text blocks from the page
+            text_dict = page.get_text("dict")
+            
+            extracted_text = ""
+            
+            # Iterate through all text blocks
+            for block in text_dict["blocks"]:
+                if "lines" in block:  # Text block
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            # Get the bounding box of this text span
+                            span_rect = fitz.Rect(span["bbox"])
+                            
+                            # Check if this span intersects with our target rectangle
+                            if span_rect.intersects(rect):
+                                # Get the intersection rectangle
+                                intersection = span_rect & rect
+                                
+                                # Calculate how much of the span is within our target area
+                                intersection_area = intersection.get_area()
+                                span_area = span_rect.get_area()
+                                
+                                # Only include text if most of it is within our target area
+                                if intersection_area / span_area > 0.5:  # At least 50% overlap
+                                    text = span["text"]
+                                    if text.strip():
+                                        extracted_text += text + " "
+            
+            return extracted_text.strip()
+            
+        except Exception as e:
+            # Fallback to simple get_textbox if the precise method fails
+            try:
+                return page.get_textbox(rect)
+            except:
+                return ""
+
     def process_picking_dockets_internal(self):
         """Internal method for picking dockets processing with barcode generation and Excel upload"""
         import re
@@ -1316,65 +3475,35 @@ class DispatchScanningApp(QMainWindow):
             if SUPABASE_AVAILABLE:
                 # Upload Store Orders (if selected)
                 if getattr(self, 'selected_excel_file', ""):
-                    # If user selected an additional file, ONLY upload new rows from it
-                    if getattr(self, 'selected_additional_excel_file', ""):
-                        try:
-                            add_name = Path(self.selected_additional_excel_file).name
-                            # Ensure we have computed diffs; if not, compute now
-                            if not getattr(self, 'additional_new_rows_data', None):
-                                new_rows_now = self.compute_new_rows_between_excels(self.selected_excel_file, self.selected_additional_excel_file)
-                                self.additional_new_rows_data = new_rows_now
-                                self.additional_new_rows_count = len(new_rows_now)
-
-                            count = len(self.additional_new_rows_data or [])
-                            if count > 0:
-                                # Build created_at from date picker (use start of day in ISO format)
-                                date_q = self.delivery_date_edit.date()
-                                created_at_iso = f"{date_q.toString('yyyy-MM-dd')}T00:00:00+00:00"
-                                self.processing_thread.progress_signal.emit(
-                                    f"📤 Uploading {count} NEW rows from additional file {add_name} to database..."
-                                )
-                                add_success = upload_store_orders_from_excel(self.additional_new_rows_data, add_name, created_at_override=created_at_iso)
-                                if add_success:
-                                    self.processing_thread.progress_signal.emit(
-                                        f"✅ Successfully uploaded {count} new rows from {add_name}"
-                                    )
-                                else:
-                                    self.processing_thread.progress_signal.emit(
-                                        f"⚠️ Failed to upload new rows from {add_name}"
-                                    )
-                            else:
-                                self.processing_thread.progress_signal.emit(
-                                    f"ℹ️ No new rows detected in additional file {add_name} — nothing to upload"
-                                )
-                        except Exception as e:
-                            self.processing_thread.progress_signal.emit(
-                                f"⚠️ Error uploading additional Excel new rows: {str(e)}"
-                            )
-                    else:
-                        # No additional file selected — upload the full initial Excel file
-                        self.processing_thread.progress_signal.emit("📤 Uploading store order Excel file to database...")
-                        try:
-                            # Read Excel file maintaining row order
-                            self.processing_thread.progress_signal.emit(f"Reading {Path(self.selected_excel_file).name} and preserving Excel row order...")
-                            df = pd.read_excel(self.selected_excel_file)
-                            
-                            # Convert DataFrame to list of dictionaries (preserves row order)
-                            store_order_data = df.to_dict('records')
-                            
-                            self.processing_thread.progress_signal.emit(f"Uploading {len(store_order_data)} rows to dispatch_orders table in picking sequence order...")
-                            
-                            # Upload to Supabase using the function (order-preserving)
-                            date_q = self.delivery_date_edit.date()
-                            created_at_iso = f"{date_q.toString('yyyy-MM-dd')}T00:00:00+00:00"
-                            success = upload_store_orders_from_excel(store_order_data, Path(self.selected_excel_file).name, created_at_override=created_at_iso)
-                            
-                            if success:
-                                self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {Path(self.selected_excel_file).name} to database with Excel order preserved!")
-                            else:
-                                self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload {Path(self.selected_excel_file).name} to database - continuing with picking docket processing")
-                        except Exception as e:
-                            self.processing_thread.progress_signal.emit(f"⚠️ Error uploading Excel file to database: {str(e)} - continuing with picking docket processing")
+                    self.processing_thread.progress_signal.emit("📤 Uploading store order Excel file to database...")
+                    try:
+                        # Read Excel file maintaining row order
+                        self.processing_thread.progress_signal.emit(f"Reading {Path(self.selected_excel_file).name} and preserving Excel row order...")
+                        df = pd.read_excel(self.selected_excel_file)
+                        
+                        # Convert DataFrame to list of dictionaries (preserves row order)
+                        store_order_data = df.to_dict('records')
+                        
+                        self.processing_thread.progress_signal.emit(f"Uploading {len(store_order_data)} rows to dispatch_orders table in picking sequence order...")
+                        
+                        # Upload to Supabase using the function (order-preserving)
+                        date_q = self.delivery_date_edit.date()
+                        created_at_iso = f"{date_q.toString('yyyy-MM-dd')}T00:00:00+00:00"
+                        
+                        # Debug: Show what we're about to upload
+                        self.processing_thread.progress_signal.emit(f"📋 About to upload {len(store_order_data)} rows to dispatch_orders table")
+                        if store_order_data:
+                            sample_row = store_order_data[0]
+                            self.processing_thread.progress_signal.emit(f"📋 Sample row columns: {list(sample_row.keys())}")
+                        
+                        success = upload_store_orders_from_excel(store_order_data, Path(self.selected_excel_file).name, created_at_override=created_at_iso)
+                        
+                        if success:
+                            self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {Path(self.selected_excel_file).name} to database with Excel order preserved!")
+                        else:
+                            self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload {Path(self.selected_excel_file).name} to database - continuing with picking docket processing")
+                    except Exception as e:
+                        self.processing_thread.progress_signal.emit(f"⚠️ Error uploading Excel file to database: {str(e)} - continuing with picking docket processing")
             else:
                 self.processing_thread.progress_signal.emit("⚠️ Supabase not available - skipping database upload")
             
@@ -1477,9 +3606,16 @@ class DispatchScanningApp(QMainWindow):
                     self.processing_thread.progress_signal.emit(f"❌ Error generating barcode for '{order_id}': {error_msg}")
                     continue
             
+            # Track files with and without matches
+            files_with_matches = set()
+            files_without_matches = set()
+            
             # Process picking docket PDF files
             for pdf_file in self.selected_picking_pdf_files:
                 self.processing_thread.progress_signal.emit(f"Processing picking docket: {Path(pdf_file).name}")
+                
+                # Track if this file has any matches
+                file_has_matches = False
                 
                 try:
                     # Open PDF
@@ -1492,24 +3628,38 @@ class DispatchScanningApp(QMainWindow):
                         # Extract text from page
                         page_text = page.get_text()
                         
-                        # If no text found, try OCR
+                        # Only use OCR if no text was found (much faster)
                         if not page_text.strip():
                             try:
-                                # Render page as image for OCR
-                                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x resolution
+                                # Render page as image for OCR with higher resolution
+                                pix = page.get_pixmap(matrix=fitz.Matrix(3, 3))  # 3x resolution for better OCR
                                 img_data = pix.tobytes("png")
                                 img = Image.open(io.BytesIO(img_data))
                                 
-                                # Perform OCR
-                                page_text = pytesseract.image_to_string(img)
-                                self.processing_thread.progress_signal.emit(
-                                    f"Used OCR for page {page_num + 1} in {Path(pdf_file).name}"
-                                )
+                                # Try multiple OCR configurations for better accuracy
+                                ocr_text = ""
+                                psm_modes = [6, 3, 7, 8, 13]  # Different page segmentation modes
+                                
+                                for psm_mode in psm_modes:
+                                    try:
+                                        ocr_result = pytesseract.image_to_string(img, config=f'--psm {psm_mode}')
+                                        if ocr_result.strip():
+                                            ocr_text = ocr_result
+                                            break
+                                    except Exception:
+                                        continue
+                                
+                                # Use OCR text if found
+                                if ocr_text.strip():
+                                    page_text = ocr_text
+                                    self.processing_thread.progress_signal.emit(
+                                        f"Used OCR for page {page_num + 1} in {Path(pdf_file).name}"
+                                    )
+                                
                             except Exception as ocr_error:
                                 self.processing_thread.progress_signal.emit(
                                     f"OCR failed for page {page_num + 1}: {str(ocr_error)}"
                                 )
-                                page_text = ""
                         
                         # Search for exact order ID matches from Excel data (both files)
                         matched_order_id = None
@@ -1536,11 +3686,29 @@ class DispatchScanningApp(QMainWindow):
                                     )
                                     break
                         
+                        # If still no match, try fuzzy matching for OCR errors
+                        if not matched_order_id:
+                            for excel_order_id in unique_order_numbers:
+                                # Try common OCR character substitutions
+                                ocr_variants = self.generate_ocr_variants(excel_order_id)
+                                for variant in ocr_variants:
+                                    if variant.upper() in page_text.upper():
+                                        matched_order_id = excel_order_id
+                                        self.processing_thread.progress_signal.emit(
+                                            f"✅ Found OCR variant match: '{excel_order_id}' (as '{variant}') on page {page_num + 1}"
+                                        )
+                                        break
+                                if matched_order_id:
+                                    break
+                        
                         # Debug: Show what we found on this page
                         if matched_order_id:
                             self.processing_thread.progress_signal.emit(
                                 f"Found Order ID '{matched_order_id}' on page {page_num + 1} of {Path(pdf_file).name}"
                             )
+                            
+                            # Track that this file has matches
+                            file_has_matches = True
                             
                             # Track that this order number was found in PDFs
                             order_numbers_found_in_pdfs.add(matched_order_id)
@@ -1561,11 +3729,12 @@ class DispatchScanningApp(QMainWindow):
                                 f"✓ Added page {page_num + 1} to order '{matched_order_id}' group"
                             )
                         else:
-                            # Debug: Show first 200 characters of page text to help troubleshoot
+                            # Debug: Show extracted text for troubleshooting
                             if page_text.strip():
-                                preview_text = page_text.replace('\n', ' ').strip()[:200]
+                                # Show first 200 characters of extracted text
+                                debug_text = page_text.strip()[:200]
                                 self.processing_thread.progress_signal.emit(
-                                    f"Page {page_num + 1} text preview: {preview_text}..."
+                                    f"Debug - Page {page_num + 1} text sample: '{debug_text}...'"
                                 )
                         
                         total_pages_processed += 1
@@ -1573,8 +3742,17 @@ class DispatchScanningApp(QMainWindow):
                     processed_files += 1
                     pdf_document.close()
                     
+                    # Track whether this file had matches
+                    if file_has_matches:
+                        files_with_matches.add(Path(pdf_file).name)
+                        self.processing_thread.progress_signal.emit(f"✅ {Path(pdf_file).name} - Found matching order numbers")
+                    else:
+                        files_without_matches.add(Path(pdf_file).name)
+                        self.processing_thread.progress_signal.emit(f"⚠️ {Path(pdf_file).name} - No matching order numbers found")
+                    
                 except Exception as e:
                     self.processing_thread.progress_signal.emit(f"Error processing {pdf_file}: {str(e)}")
+                    files_without_matches.add(Path(pdf_file).name)
                     if 'pdf_document' in locals():
                         pdf_document.close()
                     continue
@@ -1586,6 +3764,17 @@ class DispatchScanningApp(QMainWindow):
             self.processing_thread.progress_signal.emit(f"   - Scanned {total_pages_processed} total pages")
             self.processing_thread.progress_signal.emit(f"   - Found {total_matched_pages} pages with matching order numbers")
             self.processing_thread.progress_signal.emit(f"   - Matched {len(order_pages)} different order numbers")
+            
+            # Report file matching status
+            self.processing_thread.progress_signal.emit(f"📁 File Matching Status:")
+            self.processing_thread.progress_signal.emit(f"   - Files with matches: {len(files_with_matches)}")
+            self.processing_thread.progress_signal.emit(f"   - Files without matches: {len(files_without_matches)}")
+            
+            if files_without_matches:
+                self.processing_thread.progress_signal.emit(f"   ⚠️ Files skipped (no matching order numbers):")
+                for filename in sorted(files_without_matches):
+                    self.processing_thread.progress_signal.emit(f"      - {filename}")
+                self.processing_thread.progress_signal.emit(f"   💡 These files will not have barcoded PDFs created")
             
             # Comprehensive barcode and order number status reporting
             self.processing_thread.progress_signal.emit("📊 Barcode Generation and Order Number Status Report:")
@@ -1881,10 +4070,7 @@ class DispatchScanningApp(QMainWindow):
                 "order_numbers_found_in_pdfs": list(order_numbers_found_in_pdfs),
                 "order_numbers_not_found": list(set(unique_order_numbers) - order_numbers_found_in_pdfs),
                 "database_upload": SUPABASE_AVAILABLE,
-                "excel_file": Path(self.selected_excel_file).name if self.selected_excel_file else "None",
-                "additional_file": Path(self.selected_additional_excel_file).name if getattr(self, 'selected_additional_excel_file', "") else "",
-                "additional_new_rows_count": getattr(self, 'additional_new_rows_count', 0),
-                "additional_new_rows": getattr(self, 'additional_new_rows_data', [])
+                "excel_file": Path(self.selected_excel_file).name if self.selected_excel_file else "None"
             }
             
         except Exception as e:
@@ -1911,10 +4097,92 @@ class DispatchScanningApp(QMainWindow):
                 background-color: #f8fafc;
             }
             
+            QTabWidget#mainTabWidget {
+                background-color: transparent;
+            }
+            
+            QTabWidget#mainTabWidget::pane {
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                background-color: white;
+                margin-top: 5px;
+            }
+            
+            QTabBar::tab {
+                background-color: #f1f5f9;
+                border: 1px solid #e2e8f0;
+                border-bottom: none;
+                border-radius: 8px 8px 0 0;
+                padding: 12px 20px;
+                margin-right: 3px;
+                color: #64748b;
+                font-weight: 600;
+                font-size: 13px;
+                min-width: 120px;
+            }
+            
+            QTabBar::tab:selected {
+                background-color: white;
+                color: #1e293b;
+                border-bottom: 2px solid #2563eb;
+            }
+            
+            QTabBar::tab:hover {
+                background-color: #e2e8f0;
+                color: #374151;
+            }
+            
+            QFrame#stepFrame {
+                background-color: #f8fafc;
+                border: 2px solid #e2e8f0;
+                border-radius: 8px;
+                border-left: 4px solid #2563eb;
+                margin-bottom: 8px;
+            }
+            
+            QFrame#uploadSection {
+                background-color: #f0f9ff;
+                border: 2px solid #0ea5e9;
+                border-radius: 12px;
+                border-left: 5px solid #0ea5e9;
+            }
+            
+            QLabel#stepNumber {
+                font-weight: bold;
+                color: #2563eb;
+                font-size: 12px;
+                background-color: #dbeafe;
+                padding: 4px 8px;
+                border-radius: 4px;
+                border: 1px solid #93c5fd;
+            }
+            
+            QLabel#stepDescription {
+                color: #374151;
+                font-size: 12px;
+                padding: 4px 0px;
+            }
+            
+            QLabel#stepHeader {
+                color: #1e40af;
+                font-size: 16px;
+                font-weight: bold;
+                margin-bottom: 8px;
+            }
+            
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            
+            QScrollArea QWidget {
+                background-color: transparent;
+            }
+            
             QFrame#headerFrame {
                 background-color: #2563eb;
-                border-radius: 8px;
-                margin-bottom: 10px;
+                border-radius: 0px;
+                margin-bottom: 0px;
             }
             
             QLabel#headerTitle {
@@ -1935,9 +4203,9 @@ class DispatchScanningApp(QMainWindow):
             QFrame#section {
                 background-color: white;
                 border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                padding: 16px;
-                margin-bottom: 5px;
+                border-radius: 6px;
+                padding: 12px;
+                margin-bottom: 3px;
             }
             
             QLabel {
@@ -2197,6 +4465,48 @@ class DispatchScanningApp(QMainWindow):
             
             QMessageBox QPushButton:pressed {
                 background-color: #1e40af;
+            }
+            
+            QLabel#descriptionLabel {
+                color: #6b7280;
+                font-size: 14px;
+                margin-bottom: 20px;
+            }
+            
+            QFrame#placeholderFrame {
+                background-color: #f8fafc;
+                border: 2px dashed #cbd5e1;
+                border-radius: 8px;
+                padding: 40px;
+                margin: 20px 0;
+            }
+            
+            QLabel#placeholderLabel {
+                color: #94a3b8;
+                font-size: 16px;
+                font-style: italic;
+            }
+            
+            QFrame#infoFrame {
+                background-color: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 15px;
+            }
+            
+            QLabel#infoText {
+                color: #475569;
+                font-size: 13px;
+                line-height: 1.5;
+            }
+            
+            QPlainTextEdit#resultsArea {
+                background-color: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                color: #374151;
             }
         """)
 

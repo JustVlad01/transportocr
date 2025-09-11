@@ -58,16 +58,32 @@ def save_generated_barcodes(barcodes_data: List[Dict]) -> bool:
                 def clean_string(value) -> str:
                     if value is None:
                         return ""
-                    s = str(value).strip()
-                    # Remove problematic characters
+                    # Handle Path objects and other non-string types
+                    if hasattr(value, '__fspath__'):  # Path objects
+                        s = str(value)
+                    else:
+                        s = str(value).strip()
+                    # Remove problematic characters that can cause JSON issues
                     s = s.replace('\x00', '').replace('\r', ' ').replace('\n', ' ')
+                    s = s.replace('\t', ' ').replace('\b', '').replace('\f', ' ')
+                    # Remove any remaining control characters
+                    s = ''.join(char for char in s if ord(char) >= 32 or char in '\n\r\t')
                     return s
+                
+                # Ensure all values are JSON-serializable
+                try:
+                    page_number = barcode_data.get('page_number', 0)
+                    if page_number is None:
+                        page_number = 0
+                    page_number = int(page_number)
+                except (ValueError, TypeError):
+                    page_number = 0
                 
                 record = {
                     'order_id': clean_string(order_id),
                     'driver_number': clean_string(barcode_data.get('driver_number', '')),
                     'pdf_file_name': clean_string(barcode_data.get('pdf_file_name', '')),
-                    'page_number': int(barcode_data.get('page_number', 0)),
+                    'page_number': page_number,
                     'barcode_type': clean_string(barcode_data.get('barcode_type', 'Code128')),
                     'status': 'generated'
                 }
@@ -101,6 +117,7 @@ def save_generated_barcodes(barcodes_data: List[Dict]) -> bool:
             json.dumps(records)
         except Exception as json_error:
             print(f"❌ JSON serialization error: {str(json_error)}")
+            print(f"❌ Error type: {type(json_error).__name__}")
             # Try to identify the problematic record
             for i, record in enumerate(records):
                 try:
@@ -108,6 +125,13 @@ def save_generated_barcodes(barcodes_data: List[Dict]) -> bool:
                 except Exception as record_json_error:
                     print(f"❌ JSON error in record {i + 1}: {str(record_json_error)}")
                     print(f"   Problematic record: {record}")
+                    # Try to identify the problematic field
+                    for key, value in record.items():
+                        try:
+                            json.dumps({key: value})
+                        except Exception as field_error:
+                            print(f"   ❌ Problematic field '{key}': {value} (type: {type(value)})")
+                            print(f"   ❌ Field error: {str(field_error)}")
                     return False
         
         # Insert all records at once
@@ -473,12 +497,15 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str,
         print(f"📋 Uploading {len(records)} records to dispatch_orders table...")
         
         try:
+            # Try to insert into dispatch_orders table
             result = supabase.table('dispatch_orders').insert(records).execute()
             print(f"✅ Successfully uploaded {len(records)} dispatch order items from {excel_file_name}")
             print(f"🔢 Excel row order preserved using sequence numbers 1-{len(records)}")
         except Exception as db_error:
             print(f"❌ Database upload error: {str(db_error)}")
             print(f"❌ Error details: {type(db_error).__name__}")
+            print(f"❌ Error message: {getattr(db_error, 'message', 'No message')}")
+            print(f"❌ Error code: {getattr(db_error, 'code', 'No code')}")
             
             # Try to identify the problematic record
             if "JSON could not be generated" in str(db_error):
@@ -492,6 +519,12 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str,
                         print(f"❌ JSON error in record {i + 1}: {str(json_error)}")
                         print(f"   Problematic record: {record}")
                         return False
+            
+            # Check if it's a table not found error
+            if "relation" in str(db_error).lower() and "does not exist" in str(db_error).lower():
+                print("🔍 Table not found error - checking if dispatch_orders table exists")
+                print("🔍 This might be a schema or table name issue")
+            
             return False
         
         # Show summary by order with sequence info

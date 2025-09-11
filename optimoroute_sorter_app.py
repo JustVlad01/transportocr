@@ -1535,7 +1535,8 @@ class OptimoRouteSorterApp(QMainWindow):
         """Return normalized variants for matching, with aliases and zeros handled.
         Examples:
           - 'Dublin 001' -> dublin 001/dublin001/dublin 1/dublin1
-          - 'Northern Ireland 1' -> northern ireland 1/ni 1 and packed/space variants
+          - 'Northern Ireland 1' -> northern ireland 1/ni 1/northern ireland one/ni one and packed/space variants
+          - 'Cork 1' -> cork 1/cork1/cork one/corkone
         """
         try:
             label = (route_label or "").strip()
@@ -1545,10 +1546,30 @@ class OptimoRouteSorterApp(QMainWindow):
             base_aliases = {
                 "dublin": ["dublin"],
                 "northern ireland": ["northern ireland", "ni"],
+                "cork": ["cork"],
+            }
+
+            # Define number to word mappings for Cork routes
+            cork_number_words = {
+                1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+                6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+                11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen",
+                15: "fifteen", 16: "sixteen"
+            }
+
+            # Define number to word mappings for Northern Ireland routes
+            ni_number_words = {
+                1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+                6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+                11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen",
+                15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen",
+                19: "nineteen", 20: "twenty", 21: "twenty-one", 22: "twenty-two"
             }
 
             detected_num = None
             matched_aliases = None
+            is_cork_route = False
+            is_ni_route = False
 
             for canonical, aliases in base_aliases.items():
                 for alias in aliases:
@@ -1557,7 +1578,30 @@ class OptimoRouteSorterApp(QMainWindow):
                     if m:
                         detected_num = int(m.group(1))
                         matched_aliases = aliases
+                        is_cork_route = (canonical == "cork")
+                        is_ni_route = (canonical == "northern ireland")
                         break
+                
+                # If this is a Cork route, also try to match word patterns (e.g., "Cork One")
+                if canonical == "cork" and detected_num is None:
+                    for num, word in cork_number_words.items():
+                        word_pattern = rf"(?i)\b{re.escape(alias)}\b\s+{re.escape(word)}\b"
+                        if re.search(word_pattern, lower_label, flags=re.IGNORECASE):
+                            detected_num = num
+                            matched_aliases = aliases
+                            is_cork_route = True
+                            break
+                
+                # If this is a Northern Ireland route, also try to match word patterns (e.g., "Northern Ireland One")
+                if canonical == "northern ireland" and detected_num is None:
+                    for num, word in ni_number_words.items():
+                        word_pattern = rf"(?i)\b{re.escape(alias)}\b\s+{re.escape(word)}\b"
+                        if re.search(word_pattern, lower_label, flags=re.IGNORECASE):
+                            detected_num = num
+                            matched_aliases = aliases
+                            is_ni_route = True
+                            break
+                
                 if detected_num is not None:
                     break
 
@@ -1576,6 +1620,24 @@ class OptimoRouteSorterApp(QMainWindow):
                     f"{alias_l}{num_padded}",
                     f"{alias_l} {num_unpadded}",
                     f"{alias_l}{num_unpadded}",
+                ])
+
+            # Add Cork word variants if this is a Cork route
+            if is_cork_route and detected_num in cork_number_words:
+                word_variant = cork_number_words[detected_num]
+                variants.extend([
+                    f"cork {word_variant}",
+                    f"cork{word_variant}",
+                ])
+
+            # Add Northern Ireland word variants if this is an NI route
+            if is_ni_route and detected_num in ni_number_words:
+                word_variant = ni_number_words[detected_num]
+                variants.extend([
+                    f"northern ireland {word_variant}",
+                    f"northern ireland{word_variant}",
+                    f"ni {word_variant}",
+                    f"ni{word_variant}",
                 ])
 
             # unique, lowered

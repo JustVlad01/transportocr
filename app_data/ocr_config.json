@@ -1,0 +1,51 @@
+{
+  "ocr_regions": {
+    "region_1": {
+      "coordinates": [
+        387,
+        765,
+        590,
+        795
+      ],
+      "color": "red",
+      "name": "Region 1"
+    },
+    "region_2": {
+      "coordinates": [
+        432,
+        44,
+        591,
+        65
+      ],
+      "color": "blue",
+      "name": "Region 2"
+    },
+    "region_3": {
+      "coordinates": [
+        23,
+        47,
+        326,
+        73
+      ],
+      "color": "green",
+      "name": "Region 3"
+    },
+    "region_4": {
+      "coordinates": [
+        28,
+        772,
+        183,
+        799
+      ],
+      "color": "orange",
+      "name": "Region 4"
+    },
+    "region_5": {
+      "coordinates": null,
+      "color": "purple",
+      "name": "Region 5"
+    }
+  },
+  "setup_completed": true,
+  "setup_date": "2025-09-09T13:54:06.900592"
+}

@@ -5,7 +5,7 @@ a = Analysis(
     ['optimoroute_sorter_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('api_config.json', '.'), ('app_data/route_options.json', 'app_data'), ('delivery_sequence_data.json', '.')],
+    datas=[('app_data/api_config.json', 'app_data'), ('app_data/route_options.json', 'app_data'), ('delivery_sequence_data.json', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
