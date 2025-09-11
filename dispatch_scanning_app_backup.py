@@ -1613,9 +1613,6 @@ class DispatchScanningApp(QMainWindow):
         self.delivery_data_with_drivers = {}
         self.delivery_json_file = "delivery_sequence_data.json"
         self.selected_picking_pdf_files = []
-        self.selected_excel_file = ""  # For backward compatibility
-        self.excel_order_numbers = []  # For backward compatibility
-        self.excel_dataframe = None  # For backward compatibility
 
         self.order_barcodes = {}
         self.processing_thread = None
@@ -1626,10 +1623,6 @@ class DispatchScanningApp(QMainWindow):
         # Excel Generation data
         self.excel_selected_output_folder = ""
         self.excel_selected_pdf_files = []
-        
-        # Unified flow data
-        self.internal_excel_data = []  # Store Excel data internally instead of generating file
-        self.picking_sheet_files = []  # Store picking sheet PDF files
         
         # OCR Configuration - Multiple regions (hardcoded coordinates)
         self.ocr_regions = {
@@ -1658,7 +1651,7 @@ class DispatchScanningApp(QMainWindow):
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Dispatch Scanning - Streamlined Processing")
-        self.setGeometry(100, 100, 1000, 600)
+        self.setGeometry(100, 100, 1300, 700)
         
         # Central widget
         central_widget = QWidget()
@@ -1667,7 +1660,7 @@ class DispatchScanningApp(QMainWindow):
         # Main layout
         main_layout = QVBoxLayout(central_widget)
         main_layout.setSpacing(0)
-        main_layout.setContentsMargins(0, 0, 0, 8)
+        main_layout.setContentsMargins(0, 0, 0, 20)
         
         # Header
         header_frame = self.create_header()
@@ -1688,231 +1681,273 @@ class DispatchScanningApp(QMainWindow):
         self.status_bar.addPermanentWidget(self.progress_bar)
     
     def create_header(self):
-        """Create modern application header"""
+        """Create application header"""
         header_frame = QFrame()
         header_frame.setObjectName("headerFrame")
-        header_frame.setFixedHeight(50)
+        header_frame.setFixedHeight(55)
         
         layout = QHBoxLayout(header_frame)
-        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setContentsMargins(20, 10, 0, 10)
         
-        # Main title with icon
-        title_container = QHBoxLayout()
-        title_container.setSpacing(12)
-        
-        
-
-        
-        # Title and subtitle
-        title_text_container = QVBoxLayout()
-        title_text_container.setSpacing(4)
-        
-        title_label = QLabel("Dispatch Picking Sheet Upload")
+        title_label = QLabel("Dispatch orders Upload")
         title_label.setObjectName("headerTitle")
-        title_text_container.addWidget(title_label)
-        
-
-      
-        
-        
-        title_container.addLayout(title_text_container)
-        layout.addLayout(title_container)
+        layout.addWidget(title_label)
         
         layout.addStretch()
         
+       
         
         return header_frame
     
     def create_main_processing_content(self):
-        """Create the main processing content with unified interface"""
-        # Content widget - no scroll area
+        """Create the main processing content with tabbed interface"""
+        # Create main tab widget
+        main_tab_widget = QTabWidget()
+        main_tab_widget.setObjectName("mainTabWidget")
+        
+        # Tab 1: Dispatch Processing (existing functionality)
+        dispatch_tab = self.create_dispatch_processing_tab()
+        main_tab_widget.addTab(dispatch_tab, "Dispatch Processing")
+        
+        # Tab 2: Excel Generation (new functionality)
+        excel_tab = self.create_excel_generation_tab()
+        main_tab_widget.addTab(excel_tab, "Excel Generation")
+        
+        
+        return main_tab_widget
+    
+    def create_dispatch_processing_tab(self):
+        """Create the dispatch processing tab with existing functionality"""
+        # Main scroll area for better organization
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # Content widget
         content_widget = QWidget()
         content_layout = QHBoxLayout(content_widget)
-        content_layout.setSpacing(12)
-        content_layout.setContentsMargins(12, 12, 12, 12)
+        content_layout.setSpacing(20)
+        content_layout.setContentsMargins(20, 20, 20, 20)
         
         # Left column - File Selection
-        left_column = self.create_unified_file_selection_column()
+        left_column = self.create_file_selection_column()
         content_layout.addWidget(left_column)
         
         # Right column - Processing Section
-        right_column = self.create_unified_processing_column()
+        right_column = self.create_processing_column()
         content_layout.addWidget(right_column)
         
         # Set column proportions (50% left, 50% right)
         content_layout.setStretch(0, 5)
         content_layout.setStretch(1, 5)
         
-        return content_widget
+        # Set the content widget to the scroll area
+        scroll_area.setWidget(content_widget)
+        
+        return scroll_area
     
-    def create_unified_file_selection_column(self):
-        """Create unified left column with file selection controls"""
+    def create_excel_generation_tab(self):
+        """Create the Excel Generation tab with folder selection and PDF upload functionality"""
+        # Main scroll area for better organization
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # Content widget
+        content_widget = QWidget()
+        content_layout = QHBoxLayout(content_widget)
+        content_layout.setSpacing(20)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Left column - File Selection
+        left_column = self.create_excel_file_selection_column()
+        content_layout.addWidget(left_column)
+        
+        # Right column - Processing Section
+        right_column = self.create_excel_processing_column()
+        content_layout.addWidget(right_column)
+        
+        # Set column proportions (50% left, 50% right)
+        content_layout.setStretch(0, 5)
+        content_layout.setStretch(1, 5)
+        
+        # Set the content widget to the scroll area
+        scroll_area.setWidget(content_widget)
+        
+        return scroll_area
+    
+    def create_excel_file_selection_column(self):
+        """Create left column with file selection controls for Excel Generation"""
         column = QFrame()
         column.setObjectName("columnFrame")
-        column.setFixedWidth(480)
+        column.setFixedWidth(550)
         
         layout = QVBoxLayout(column)
         layout.setSpacing(8)
         
         # Output folder section
-        output_section = self.create_output_folder_section()
+        output_section = self.create_excel_output_folder_section()
         layout.addWidget(output_section)
         
-        # Picking sheet PDF files section
-        picking_section = self.create_picking_sheet_section()
-        layout.addWidget(picking_section)
-        
-        # Date picker section
-        date_section = self.create_date_section()
-        layout.addWidget(date_section)
-        
-        # Process button section
-        process_section = self.create_process_button_section()
-        layout.addWidget(process_section)
+        # PDF files section
+        pdf_section = self.create_excel_pdf_files_section()
+        layout.addWidget(pdf_section)
         
         layout.addStretch()
+        
         return column
     
-    def create_process_button_section(self):
-        """Create process button section"""
+    def create_excel_output_folder_section(self):
+        """Create output folder selection section for Excel Generation"""
         section = QFrame()
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(8)
+        layout.setSpacing(0)
         
-        # Title with icon
-        title_container = QHBoxLayout()
-        title_container.setSpacing(8)
+        # Section title
+        title = QLabel("📁 Output Folder")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
         
-        icon_label = QLabel("4")
-        icon_label.setObjectName("sectionIcon")
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.setStyleSheet("""
-            QLabel#sectionIcon {
-                font-size: 12px;
-                background-color: #3498db;
-                color: white;
-                border-radius: 3px;
-                padding: 4px;
-                min-width: 20px;
-                max-width: 20px;
-                min-height: 20px;
-                max-height: 20px;
-                text-align: center;
-                qproperty-alignment: AlignCenter;
-            }
-        """)
-        title_container.addWidget(icon_label)
+        # Button row
+        btn_layout = QHBoxLayout()
+        self.excel_browse_output_btn = QPushButton("Select Output Folder")
+        self.excel_browse_output_btn.clicked.connect(self.browse_excel_output_folder)
         
-        title_label = QLabel("Process Picking Sheets")
-        title_label.setObjectName("sectionTitle")
-        title_container.addWidget(title_label)
+        self.excel_clear_output_btn = QPushButton("Clear")
+        self.excel_clear_output_btn.setObjectName("secondaryButton")
+        self.excel_clear_output_btn.clicked.connect(self.clear_excel_output_folder)
         
-        title_container.addStretch()
-        layout.addLayout(title_container)
+        btn_layout.addWidget(self.excel_browse_output_btn)
+        btn_layout.addWidget(self.excel_clear_output_btn)
+        layout.addLayout(btn_layout)
         
-        # Process button
-        self.unified_process_btn = QPushButton("Process Picking Sheets")
-        self.unified_process_btn.setObjectName("primaryButton")
-        self.unified_process_btn.clicked.connect(self.process_unified_flow)
-        self.unified_process_btn.setEnabled(False)
-        layout.addWidget(self.unified_process_btn)
-        
-        # Progress bar (initially hidden)
-        self.unified_progress_bar = QProgressBar()
-        self.unified_progress_bar.setVisible(False)
-        layout.addWidget(self.unified_progress_bar)
+        # Status display
+        self.excel_output_folder_label = QLabel("No output folder selected")
+        self.excel_output_folder_label.setObjectName("infoText")
+        self.excel_output_folder_label.setWordWrap(True)
+        layout.addWidget(self.excel_output_folder_label)
         
         return section
     
-    def create_unified_processing_column(self):
-        """Create unified right column with processing section"""
+    def create_excel_pdf_files_section(self):
+        """Create PDF files selection section for Excel Generation"""
+        section = QFrame()
+        section.setObjectName("section")
+        
+        layout = QVBoxLayout(section)
+        layout.setSpacing(0)
+        
+        # Section title
+        title = QLabel("📄 PDF Files to Process")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        
+        # Subtitle
+        subtitle = QLabel("Select multiple PDF files for Excel generation")
+        subtitle.setObjectName("subtitleText")
+        layout.addWidget(subtitle)
+        
+        # Button row
+        btn_layout = QHBoxLayout()
+        self.excel_browse_pdf_btn = QPushButton("Select PDF Files")
+        self.excel_browse_pdf_btn.clicked.connect(self.browse_excel_pdf_files)
+        
+        self.excel_clear_pdf_btn = QPushButton("Clear All")
+        self.excel_clear_pdf_btn.setObjectName("secondaryButton")
+        self.excel_clear_pdf_btn.clicked.connect(self.clear_excel_pdf_files)
+        
+        btn_layout.addWidget(self.excel_browse_pdf_btn)
+        btn_layout.addWidget(self.excel_clear_pdf_btn)
+        layout.addLayout(btn_layout)
+        
+        # Quick OCR setup button
+        quick_setup_layout = QHBoxLayout()
+        self.quick_ocr_setup_btn = QPushButton("Quick OCR Setup (Select PDF)")
+        self.quick_ocr_setup_btn.setObjectName("secondaryButton")
+        self.quick_ocr_setup_btn.clicked.connect(self.quick_ocr_setup)
+        quick_setup_layout.addWidget(self.quick_ocr_setup_btn)
+        quick_setup_layout.addStretch()
+        layout.addLayout(quick_setup_layout)
+        
+        # Status display
+        self.excel_pdf_files_label = QLabel("No PDF files selected")
+        self.excel_pdf_files_label.setObjectName("infoText")
+        self.excel_pdf_files_label.setWordWrap(True)
+        layout.addWidget(self.excel_pdf_files_label)
+        
+        return section
+    
+    def create_excel_processing_column(self):
+        """Create right column with processing controls for Excel Generation"""
         column = QFrame()
         column.setObjectName("columnFrame")
         
         layout = QVBoxLayout(column)
         layout.setSpacing(8)
         
-        # Workflow information section
-        workflow_section = self.create_workflow_info_section()
-        layout.addWidget(workflow_section)
-        
-        # Excel column requirements section
-        requirements_section = self.create_requirements_section()
-        layout.addWidget(requirements_section)
+        # Processing section
+        processing_section = self.create_excel_processing_section()
+        layout.addWidget(processing_section)
         
         layout.addStretch()
+        
         return column
     
-    def create_picking_sheet_section(self):
-        """Create picking sheet PDF files selection section"""
+    def create_excel_processing_section(self):
+        """Create processing section for Excel Generation"""
         section = QFrame()
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(12)
+        layout.setSpacing(0)
         
-        # Title with icon
-        title_container = QHBoxLayout()
-        title_container.setSpacing(8)
+        # Section title
+        title = QLabel("⚙️ Excel Generation")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
         
-        icon_label = QLabel("2")
-        icon_label.setObjectName("sectionIcon")
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.setStyleSheet("""
-            QLabel#sectionIcon {
-                font-size: 12px;
-                background-color: #3498db;
-                color: white;
-                border-radius: 3px;
-                padding: 4px;
-                min-width: 20px;
-                max-width: 20px;
-                min-height: 20px;
-                max-height: 20px;
-                text-align: center;
-                qproperty-alignment: AlignCenter;
-            }
-        """)
-        title_container.addWidget(icon_label)
+        # Subtitle
+        subtitle = QLabel("Generate Excel files from selected PDFs")
+        subtitle.setObjectName("subtitleText")
+        layout.addWidget(subtitle)
         
-        title_label = QLabel("Picking Sheet PDF Files")
-        title_label.setObjectName("sectionTitle")
-        title_container.addWidget(title_label)
+        # Process button
+        self.excel_process_btn = QPushButton("Generate Excel Files")
+        self.excel_process_btn.setObjectName("primaryButton")
+        self.excel_process_btn.clicked.connect(self.process_excel_generation)
+        self.excel_process_btn.setEnabled(False)
+        layout.addWidget(self.excel_process_btn)
         
-        title_container.addStretch()
-        layout.addLayout(title_container)
+        # Show OCR region button
+        self.excel_show_region_btn = QPushButton("Show Current OCR Region")
+        self.excel_show_region_btn.setObjectName("secondaryButton")
+        self.excel_show_region_btn.clicked.connect(self.show_current_ocr_region)
+        layout.addWidget(self.excel_show_region_btn)
         
-      
-
-
+        # Configure OCR region button
+        self.excel_configure_ocr_btn = QPushButton("Configure OCR Region")
+        self.excel_configure_ocr_btn.setObjectName("primaryButton")
+        self.excel_configure_ocr_btn.clicked.connect(self.configure_ocr_region)
+        layout.addWidget(self.excel_configure_ocr_btn)
         
-        # File selection controls
-        file_controls_layout = QHBoxLayout()
+        # Progress bar
+        self.excel_progress_bar = QProgressBar()
+        self.excel_progress_bar.setVisible(False)
+        self.excel_progress_bar.setRange(0, 100)
+        self.excel_progress_bar.setValue(0)
+        layout.addWidget(self.excel_progress_bar)
         
-        self.picking_sheet_btn = QPushButton("Select Picking Sheets")
-        self.picking_sheet_btn.setObjectName("fileButton")
-        self.picking_sheet_btn.clicked.connect(self.browse_picking_sheet_files)
-        file_controls_layout.addWidget(self.picking_sheet_btn)
-        
-        self.clear_picking_sheet_btn = QPushButton("Clear")
-        self.clear_picking_sheet_btn.setObjectName("clearButton")
-        self.clear_picking_sheet_btn.clicked.connect(self.clear_picking_sheet_files)
-        file_controls_layout.addWidget(self.clear_picking_sheet_btn)
-        
-        layout.addLayout(file_controls_layout)
-        
-        # File status label
-        self.picking_sheet_label = QLabel("No picking sheet files selected")
-        self.picking_sheet_label.setObjectName("fileStatusLabel")
-        layout.addWidget(self.picking_sheet_label)
+        # Status display
+        self.excel_status_label = QLabel("Select output folder and PDF files to begin")
+        self.excel_status_label.setObjectName("infoText")
+        self.excel_status_label.setWordWrap(True)
+        layout.addWidget(self.excel_status_label)
         
         return section
-    
-    
-    
-    
 
 
 
@@ -1954,38 +1989,12 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(12)
+        layout.setSpacing(0)
         
-        # Title with icon
-        title_container = QHBoxLayout()
-        title_container.setSpacing(8)
-        
-        icon_label = QLabel("1")
-        icon_label.setObjectName("sectionIcon")
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.setStyleSheet("""
-            QLabel#sectionIcon {
-                font-size: 12px;
-                background-color: #3498db;
-                color: white;
-                border-radius: 3px;
-                padding: 4px;
-                min-width: 20px;
-                max-width: 20px;
-                min-height: 20px;
-                max-height: 20px;
-                text-align: center;
-                qproperty-alignment: AlignCenter;
-            }
-        """)
-        title_container.addWidget(icon_label)
-        
-        title = QLabel("Output Folder")
+        # Section title
+        title = QLabel("📁 Output Folder")
         title.setObjectName("sectionTitle")
-        title_container.addWidget(title)
-        
-        title_container.addStretch()
-        layout.addLayout(title_container)
+        layout.addWidget(title)
         
         # Button row
         btn_layout = QHBoxLayout()
@@ -2055,38 +2064,12 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(12)
+        layout.setSpacing(0)
         
-        # Title with icon
-        title_container = QHBoxLayout()
-        title_container.setSpacing(8)
-        
-        icon_label = QLabel("3")
-        icon_label.setObjectName("sectionIcon")
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.setStyleSheet("""
-            QLabel#sectionIcon {
-                font-size: 12px;
-                background-color: #3498db;
-                color: white;
-                border-radius: 3px;
-                padding: 4px;
-                min-width: 20px;
-                max-width: 20px;
-                min-height: 20px;
-                max-height: 20px;
-                text-align: center;
-                qproperty-alignment: AlignCenter;
-            }
-        """)
-        title_container.addWidget(icon_label)
-        
-        title = QLabel("Order Picking Date")
+        # Section title
+        title = QLabel("📅 Order Picking Date")
         title.setObjectName("sectionTitle")
-        title_container.addWidget(title)
-        
-        title_container.addStretch()
-        layout.addLayout(title_container)
+        layout.addWidget(title)
         
         # Date picker
         self.delivery_date_edit = QDateEdit()
@@ -2185,23 +2168,21 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
         
-        # Title
-        title = QLabel("Step by Step Process")
+        # Section title
+        title = QLabel("📋 Workflow Overview")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
         
         # Workflow steps
         workflow_text = QLabel("""
-        <b>Follow these steps</b>
-        <br>1. Select the output folder where proccessed picking sheets will be saved
-        <br>2. Select the picking sheets from customer service
-        <br>3. Select the order picking date
-        <br>4. Click the 'Proccess Picking Sheets' button to start the process
-        <br>5. Check the output folder for the processed picking sheets
-      
-       
+        <b>This process will:</b>
+        <br>1. 📤 Upload store orders to dispatch_orders table (if selected)
+        <br>2. 🏷️ Generate barcodes for order numbers from Column A
+        <br>3. 📄 Scan PDF files for order numbers and add barcodes to matching pages
+        <br>4. 📅 Organize files in date-based folders
+        <br>5. 📊 Add barcodes to pages with matching order IDs (other pages remain unchanged)
         """)
         workflow_text.setObjectName("workflowText")
         workflow_text.setWordWrap(True)
@@ -2215,10 +2196,10 @@ class DispatchScanningApp(QMainWindow):
         section.setObjectName("section")
         
         layout = QVBoxLayout(section)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
         
-        # Title
-        title = QLabel("Expected Excel Columns")
+        # Section title
+        title = QLabel("📊 Expected Excel Columns")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
         
@@ -2357,9 +2338,6 @@ class DispatchScanningApp(QMainWindow):
             self.output_folder_label.setText(f"Selected: {folder_path}")
             self.output_folder_label.setObjectName("successText")
             self.update_status(f"Output folder set to: {folder_path}")
-            # Update unified status if the method exists
-            if hasattr(self, 'update_unified_status'):
-                self.update_unified_status()
     
     def clear_output_folder(self):
         """Clear selected output folder"""
@@ -2367,93 +2345,113 @@ class DispatchScanningApp(QMainWindow):
         self.output_folder_label.setText("No output folder selected (will use default: picking_dockets_output)\nFiles will be saved in a date-based subfolder (YYYY-MM-DD)")
         self.output_folder_label.setObjectName("infoText")
         self.update_status("Output folder cleared - will use default location")
-        # Update unified status if the method exists
-        if hasattr(self, 'update_unified_status'):
-            self.update_unified_status()
 
     # Excel Generation file handling methods
+    def browse_excel_output_folder(self):
+        """Browse for output folder for Excel Generation"""
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Output Folder for Excel Generation",
+            str(Path.home())
+        )
+        if folder_path:
+            self.excel_selected_output_folder = folder_path
+            self.excel_output_folder_label.setText(f"Output folder: {folder_path}")
+            self.excel_output_folder_label.setObjectName("successText")
+            self.update_excel_generation_status()
+            self.update_status(f"Excel output folder set to: {folder_path}")
     
-
-    def browse_picking_sheet_files(self):
-        """Browse for picking sheet PDF files"""
+    def clear_excel_output_folder(self):
+        """Clear selected output folder for Excel Generation"""
+        self.excel_selected_output_folder = ""
+        self.excel_output_folder_label.setText("No output folder selected")
+        self.excel_output_folder_label.setObjectName("infoText")
+        self.update_excel_generation_status()
+        self.update_status("Excel output folder cleared")
+    
+    def browse_excel_pdf_files(self):
+        """Browse for PDF files for Excel Generation"""
         file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Select Picking Sheet PDF Files",
-            "",
-            "PDF Files (*.pdf);;All Files (*)"
+            "Select PDF Files for Excel Generation",
+            str(Path.home()),
+            "PDF files (*.pdf);;All files (*.*)"
         )
-        
         if file_paths:
-            self.picking_sheet_files = file_paths
+            self.excel_selected_pdf_files = file_paths
             file_count = len(file_paths)
-            self.picking_sheet_label.setText(f"Selected {file_count} picking sheet file(s)")
-            self.picking_sheet_label.setObjectName("successText")
-            self.update_unified_status()
-            self.update_status(f"Selected {file_count} picking sheet files")
-    
-    def clear_picking_sheet_files(self):
-        """Clear selected picking sheet files"""
-        self.picking_sheet_files = []
-        self.picking_sheet_label.setText("No picking sheet files selected")
-        self.picking_sheet_label.setObjectName("infoText")
-        self.update_unified_status()
-        self.update_status("Picking sheet files cleared")
-    
-    def update_unified_status(self):
-        """Update the unified processing status and enable/disable process button"""
-        has_output_folder = hasattr(self, 'selected_output_folder') and self.selected_output_folder
-        has_picking_sheets = hasattr(self, 'picking_sheet_files') and self.picking_sheet_files
-        
-        if has_output_folder and has_picking_sheets:
-            self.unified_process_btn.setEnabled(True)
-            self.unified_status_label.setText("Ready to process picking sheets")
-            self.unified_status_label.setObjectName("successText")
-        else:
-            self.unified_process_btn.setEnabled(False)
-            if not has_output_folder and not has_picking_sheets:
-                self.unified_status_label.setText("Please select output folder and picking sheet files")
-            elif not has_output_folder:
-                self.unified_status_label.setText("Please select output folder")
+            if file_count == 1:
+                self.excel_pdf_files_label.setText(f"1 PDF file selected: {Path(file_paths[0]).name}")
             else:
-                self.unified_status_label.setText("Please select picking sheet files")
-            self.unified_status_label.setObjectName("infoText")
+                self.excel_pdf_files_label.setText(f"{file_count} PDF files selected")
+            self.excel_pdf_files_label.setObjectName("successText")
+            self.update_excel_generation_status()
+            self.update_status(f"Selected {file_count} PDF files for Excel generation")
     
-    def process_unified_flow(self):
-        """Process the unified flow: extract data from picking sheets, create internal Excel data, and process with barcodes"""
-        if not hasattr(self, 'selected_output_folder') or not self.selected_output_folder:
+    def clear_excel_pdf_files(self):
+        """Clear selected PDF files for Excel Generation"""
+        self.excel_selected_pdf_files = []
+        self.excel_pdf_files_label.setText("No PDF files selected")
+        self.excel_pdf_files_label.setObjectName("infoText")
+        self.update_excel_generation_status()
+        self.update_status("Excel PDF files cleared")
+    
+    def update_excel_generation_status(self):
+        """Update the Excel Generation status and enable/disable process button"""
+        has_output_folder = hasattr(self, 'excel_selected_output_folder') and self.excel_selected_output_folder
+        has_pdf_files = hasattr(self, 'excel_selected_pdf_files') and self.excel_selected_pdf_files
+        
+        if has_output_folder and has_pdf_files:
+            self.excel_process_btn.setEnabled(True)
+            self.excel_status_label.setText("Ready to generate Excel files")
+            self.excel_status_label.setObjectName("successText")
+        else:
+            self.excel_process_btn.setEnabled(False)
+            missing_items = []
+            if not has_output_folder:
+                missing_items.append("output folder")
+            if not has_pdf_files:
+                missing_items.append("PDF files")
+            self.excel_status_label.setText(f"Select {', '.join(missing_items)} to begin")
+            self.excel_status_label.setObjectName("infoText")
+    
+    def process_excel_generation(self):
+        """Process Excel generation from selected PDF files"""
+        if not hasattr(self, 'excel_selected_output_folder') or not self.excel_selected_output_folder:
             QMessageBox.warning(self, "Missing Output Folder", "Please select an output folder first.")
             return
         
-        if not hasattr(self, 'picking_sheet_files') or not self.picking_sheet_files:
-            QMessageBox.warning(self, "Missing Picking Sheets", "Please select picking sheet PDF files to process first.")
+        if not hasattr(self, 'excel_selected_pdf_files') or not self.excel_selected_pdf_files:
+            QMessageBox.warning(self, "Missing PDF Files", "Please select PDF files to process first.")
             return
         
         try:
             # Check if OCR setup is completed
             if not self.check_ocr_setup():
-                self.unified_status_label.setText("OCR setup cancelled or failed")
-                self.unified_status_label.setObjectName("warningText")
-                self.unified_process_btn.setEnabled(True)
+                self.excel_status_label.setText("OCR setup cancelled or failed")
+                self.excel_status_label.setObjectName("warningText")
+                self.excel_process_btn.setEnabled(True)
                 return
             
             # Update status and show progress bar
-            self.unified_status_label.setText("Processing picking sheets...")
-            self.unified_status_label.setObjectName("infoText")
-            self.unified_process_btn.setEnabled(False)
-            self.unified_progress_bar.setVisible(True)
-            self.unified_progress_bar.setValue(0)
-            self.update_status("Starting unified processing...")
+            self.excel_status_label.setText("Processing Excel generation...")
+            self.excel_status_label.setObjectName("infoText")
+            self.excel_process_btn.setEnabled(False)
+            self.excel_progress_bar.setVisible(True)
+            self.excel_progress_bar.setValue(0)
+            self.update_status("Starting Excel generation process...")
             
-            # Step 1: Extract data from picking sheets (same as Excel generation)
+            # Process each PDF file
             debug_results = []
+            # Get all configured regions
             configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
             
-            # Calculate total work
-            total_pdfs = len(self.picking_sheet_files)
+            # Calculate total work (PDFs * pages * regions)
+            total_pdfs = len(self.excel_selected_pdf_files)
             total_work = 0
             pdf_page_counts = []
             
-            for pdf_path in self.picking_sheet_files:
+            for pdf_path in self.excel_selected_pdf_files:
                 try:
                     pdf_document = fitz.open(pdf_path)
                     page_count = len(pdf_document)
@@ -2466,42 +2464,59 @@ class DispatchScanningApp(QMainWindow):
             
             current_work = 0
             
-            for pdf_index, pdf_path in enumerate(self.picking_sheet_files):
+            for pdf_index, pdf_path in enumerate(self.excel_selected_pdf_files):
                 self.update_status(f"Processing: {Path(pdf_path).name}")
                 
                 try:
+                    # Open PDF with PyMuPDF
                     pdf_document = fitz.open(pdf_path)
                     
+                    # Process each page
                     for page_num in range(len(pdf_document)):
                         page = pdf_document[page_num]
                         
+                        # Process each configured region using direct text extraction
                         for region in configured_regions:
                             coordinates = region['coordinates']
+                            
+                            # Extract text directly from the specified coordinates using PyMuPDF
+                            # coordinates are (x1, y1, x2, y2)
                             rect = fitz.Rect(coordinates[0], coordinates[1], coordinates[2], coordinates[3])
                             
+                            # Try precise text extraction from exact coordinates
                             extracted_text = self.extract_text_from_exact_coordinates(page, rect)
                             
+                            # If no text found with direct extraction, try OCR as fallback
                             if not extracted_text.strip():
                                 try:
-                                    mat = fitz.Matrix(3.0, 3.0)
+                                    # Render the specific region as image for OCR fallback
+                                    mat = fitz.Matrix(3.0, 3.0)  # Higher resolution for better OCR
                                     pix = page.get_pixmap(matrix=mat, clip=rect)
                                     img_data = pix.tobytes("png")
                                     image = Image.open(io.BytesIO(img_data))
                                     
+                                    # Try OCR with multiple PSM modes
                                     psm_modes = [6, 3, 7, 8, 13]
                                     for psm_mode in psm_modes:
                                         try:
                                             ocr_text = pytesseract.image_to_string(image, config=f'--psm {psm_mode}')
                                             if ocr_text.strip():
                                                 extracted_text = ocr_text
+                                                self.processing_thread.progress_signal.emit(
+                                                    f"Used OCR fallback for {region['name']} on page {page_num + 1}"
+                                                )
                                                 break
                                         except Exception:
                                             continue
                                 except Exception as ocr_error:
-                                    pass
+                                    self.processing_thread.progress_signal.emit(
+                                        f"OCR fallback failed for {region['name']}: {str(ocr_error)}"
+                                    )
                             
+                            # Clean up the text for better accuracy
                             cleaned_text = self.clean_extracted_text(extracted_text)
                             
+                            # Store results
                             result = {
                                 'file': Path(pdf_path).name,
                                 'page': page_num + 1,
@@ -2513,14 +2528,25 @@ class DispatchScanningApp(QMainWindow):
                             }
                             debug_results.append(result)
                             
+                            # Update progress
                             current_work += 1
                             if total_work > 0:
-                                progress = int((current_work / total_work) * 50)  # First half for data extraction
-                                self.unified_progress_bar.setValue(progress)
-                                self.unified_status_label.setText(f"Extracting data: {Path(pdf_path).name} - Page {page_num + 1} - Region {region['name']} ({progress}%)")
+                                progress = int((current_work / total_work) * 100)
+                                self.excel_progress_bar.setValue(progress)
+                                self.excel_status_label.setText(f"Processing: {Path(pdf_path).name} - Page {page_num + 1} - Region {region['name']} ({progress}%)")
                             
+                            # Update status with detailed debug info
                             self.update_status(f"Page {page_num + 1}, {region['name']}: '{cleaned_text}'")
+                            
+                            # Debug: Show what was extracted from Region 4 specifically
+                            if 'Region 4' in region['name']:
+                                self.update_status(f"DEBUG - Region 4 text: '{cleaned_text}'")
+                                if 'Total Items Delivered:' in cleaned_text:
+                                    self.update_status(f"DEBUG - TRIGGER TEXT FOUND in Region 4!")
+                                else:
+                                    self.update_status(f"DEBUG - No trigger text found in Region 4")
                     
+                    # Close the PDF document
                     pdf_document.close()
                         
                 except Exception as e:
@@ -2532,306 +2558,24 @@ class DispatchScanningApp(QMainWindow):
                     debug_results.append(error_result)
                     self.update_status(f"Error processing {Path(pdf_path).name}: {str(e)}")
             
-            # Step 2: Create internal Excel data structure (instead of generating Excel file)
-            self.unified_status_label.setText("Creating internal data structure...")
-            self.unified_progress_bar.setValue(60)
+            # Generate Excel files
+            self.generate_excel_files(debug_results)
             
-            self.internal_excel_data = self.create_internal_excel_data(debug_results)
-            
-            if not self.internal_excel_data:
-                QMessageBox.warning(self, "No Data", "No valid data found in the picking sheets. Please check the PDF files and try again.")
-                self.unified_status_label.setText("No data found")
-                self.unified_status_label.setObjectName("warningText")
-                self.unified_process_btn.setEnabled(True)
-                self.unified_progress_bar.setVisible(False)
-                return
-            
-            # DEBUG: Show the generated table data
-            self.show_debug_table(self.internal_excel_data)
-            
-            # Also print to console for easy debugging
-            self.print_debug_data(self.internal_excel_data)
-            
-            # Step 3: Set up for barcode generation and database upload
-            self.unified_status_label.setText("Preparing for barcode generation...")
-            self.unified_progress_bar.setValue(70)
-            
-            # Set the internal data as the Excel data for the existing processing flow
-            self.excel_order_numbers = [row.get('ordernumber', '') for row in self.internal_excel_data if row.get('ordernumber')]
-            
-            # Set the picking sheet files as the PDF files for processing
-            self.selected_picking_pdf_files = self.picking_sheet_files
-            
-            # Step 4: Continue with the existing barcode generation and database upload process
-            self.unified_status_label.setText("Generating barcodes and uploading to database...")
-            self.unified_progress_bar.setValue(80)
-            
-            # Start the existing processing flow
-            self.show_progress(True)
-            self.update_status("Starting barcode generation and database upload...")
-            
-            # Start background processing
-            self.processing_thread = ProcessingThread(self)
-            self.processing_thread.progress_signal.connect(self.update_status)
-            self.processing_thread.finished_signal.connect(self.on_unified_processing_finished)
-            self.processing_thread.start()
+            # Reset status
+            self.excel_status_label.setText("Excel generation completed")
+            self.excel_status_label.setObjectName("successText")
+            self.excel_process_btn.setEnabled(True)
+            self.excel_progress_bar.setVisible(False)
+            self.update_status("Excel generation process completed")
             
         except Exception as e:
-            QMessageBox.critical(self, "Unified Processing Error", f"An error occurred during unified processing:\n{str(e)}")
-            self.unified_status_label.setText("Unified processing failed")
-            self.unified_status_label.setObjectName("errorText")
-            self.unified_process_btn.setEnabled(True)
-            self.unified_progress_bar.setVisible(False)
-            self.update_status(f"Unified processing failed: {str(e)}")
-    
-    def create_internal_excel_data(self, debug_results):
-        """Create internal Excel data structure from debug results (same logic as generate_excel_files but returns data instead of saving)"""
-        if not debug_results:
-            return []
-        
-        try:
-            # Group results by file and page, but only include pages with "Total Items Delivered:" in Region 4
-            results_by_file_page = {}
-            pages_to_skip = set()
-            
-            # First pass: identify pages that should be skipped
-            for result in debug_results:
-                if 'error' in result:
-                    continue
-                    
-                file_name = result.get('file', 'Unknown')
-                page_num = result.get('page', 1)
-                region_name = result.get('region', 'Unknown')
-                extracted_text = result.get('extracted_text', '')
-                
-                key = (file_name, page_num)
-                
-                if 'Region 4' in region_name:
-                    cleaned_text = extracted_text.strip()
-                    if 'Total Items Delivered:' not in cleaned_text:
-                        pages_to_skip.add(key)
-                    else:
-                        self.update_status(f"Processing page {page_num} - 'Total Items Delivered:' found in Region 4")
-            
-            # Second pass: collect data only from pages that should be processed
-            for result in debug_results:
-                if 'error' in result:
-                    continue
-                    
-                file_name = result.get('file', 'Unknown')
-                page_num = result.get('page', 1)
-                region_name = result.get('region', 'Unknown')
-                extracted_text = result.get('extracted_text', '')
-                
-                key = (file_name, page_num)
-                
-                if key in pages_to_skip:
-                    continue
-                
-                if key not in results_by_file_page:
-                    results_by_file_page[key] = {
-                        'file': file_name,
-                        'page': page_num,
-                        'region_1': '',  # Column J (Route)
-                        'region_2': '',  # Column A (Order Number)
-                        'region_3': '',  # Column G (Site Name)
-                        'region_4': ''   # For trigger text verification
-                    }
-                
-                if 'Region 1' in region_name:
-                    results_by_file_page[key]['region_1'] = extracted_text
-                elif 'Region 2' in region_name:
-                    results_by_file_page[key]['region_2'] = extracted_text
-                elif 'Region 3' in region_name:
-                    results_by_file_page[key]['region_3'] = extracted_text
-                elif 'Region 4' in region_name:
-                    results_by_file_page[key]['region_4'] = extracted_text
-            
-            # Convert to Excel data structure
-            excel_data = []
-            for key, data in results_by_file_page.items():
-                # Map regions to Excel columns
-                order_number = data['region_2'].strip()
-                site_name = data['region_3'].strip()
-                route = data['region_1'].strip()
-                
-                if order_number:  # Only add rows with order numbers
-                    excel_row = {
-                        'ordernumber': order_number,  # Database expects lowercase field names
-                        'itemcode': 'DEFAULT',  # Default item code for picking sheets
-                        'product_description': 'Picking Sheet Order',  # Default description
-                        'barcode': '',  # Will be generated later
-                        'customer_type': 'PICKUP',  # Default customer type
-                        'quantity': 1,  # Default quantity (as integer)
-                        'sitename': site_name,  # Database expects lowercase field names
-                        'accountcode': 'PICKUP',  # Default account code
-                        'dispatchcode': 'PICKUP',  # Default dispatch code
-                        'route': route  # Database expects lowercase field names
-                    }
-                    excel_data.append(excel_row)
-            
-            self.update_status(f"Created {len(excel_data)} rows of internal Excel data")
-            return excel_data
-            
-        except Exception as e:
-            self.update_status(f"Error creating internal Excel data: {str(e)}")
-            return []
-    
-    def on_unified_processing_finished(self, success, result):
-        """Handle unified processing completion"""
-        self.show_progress(False)
-        self.unified_process_btn.setEnabled(True)
-        self.unified_progress_bar.setVisible(False)
-        
-        if success:
-            self.unified_status_label.setText("Unified processing completed successfully")
-            self.unified_status_label.setObjectName("successText")
-            self.update_status("Unified processing completed successfully")
-            
-            # Mark as processed
-            self.picking_dockets_processed = True
-            
-            # Show professional results dialog
-            results_dialog = ProcessingResultsDialog(result, self)
-            results_dialog.setWindowTitle("Unified Processing Results")
-            results_dialog.exec()
-        else:
-            error_msg = result.get("error", "Unknown error occurred")
-            self.unified_status_label.setText("Unified processing failed")
-            self.unified_status_label.setObjectName("errorText")
-            self.update_status(f"Unified processing failed: {error_msg}")
-            
-            # Show professional error dialog with any partial results
-            if result.get('processed_files', 0) > 0:
-                results_dialog = ProcessingResultsDialog(result, self)
-                results_dialog.setWindowTitle("Unified Processing Completed with Issues")
-                results_dialog.exec()
-            else:
-                QMessageBox.critical(self, "Processing Error", f"Error during unified processing: {error_msg}")
+            QMessageBox.critical(self, "Excel Generation Error", f"An error occurred during Excel generation:\n{str(e)}")
+            self.excel_status_label.setText("Excel generation failed")
+            self.excel_status_label.setObjectName("errorText")
+            self.excel_process_btn.setEnabled(True)
+            self.excel_progress_bar.setVisible(False)
+            self.update_status(f"Excel generation failed: {str(e)}")
 
-    def show_debug_table(self, data):
-        """Show a debug table with the generated data"""
-        try:
-            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QPushButton, QLabel
-            from PyQt5.QtCore import Qt
-            
-            dialog = QDialog(self)
-            dialog.setWindowTitle("DEBUG: Generated Table Data")
-            dialog.setModal(True)
-            dialog.resize(1200, 600)
-            
-            layout = QVBoxLayout(dialog)
-            
-            # Title
-            title_label = QLabel(f"Generated Table Data ({len(data)} rows)")
-            title_label.setStyleSheet("font-size: 14px; font-weight: bold; margin: 10px;")
-            layout.addWidget(title_label)
-            
-            # Table
-            table = QTableWidget()
-            table.setRowCount(len(data))
-            
-            if data:
-                # Get column names from first row
-                columns = list(data[0].keys())
-                table.setColumnCount(len(columns))
-                table.setHorizontalHeaderLabels(columns)
-                
-                # Populate table
-                for row_idx, row_data in enumerate(data):
-                    for col_idx, column in enumerate(columns):
-                        value = str(row_data.get(column, ''))
-                        item = QTableWidgetItem(value)
-                        table.setItem(row_idx, col_idx, item)
-                
-                # Resize columns to content
-                table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-                table.horizontalHeader().setStretchLastSection(True)
-            
-            layout.addWidget(table)
-            
-            # Close button
-            close_btn = QPushButton("Close")
-            close_btn.clicked.connect(dialog.accept)
-            layout.addWidget(close_btn)
-            
-            # Show dialog
-            dialog.exec()
-            
-        except ImportError:
-            # Fallback: Show data in console only (no PyQt5 dependencies)
-            print("\n" + "="*80)
-            print("DEBUG: Generated Table Data")
-            print("="*80)
-            print(f"Total rows: {len(data)}")
-            print()
-            
-            if data:
-                # Show column headers
-                columns = list(data[0].keys())
-                print("Columns:", " | ".join(columns))
-                print("-" * 80)
-                
-                # Show first 10 rows
-                for i, row in enumerate(data[:10]):
-                    row_str = " | ".join([str(row.get(col, ''))[:15] for col in columns])
-                    print(f"Row {i+1:2d}: {row_str}")
-                
-                if len(data) > 10:
-                    print(f"... and {len(data) - 10} more rows")
-            
-            print("="*80)
-            print("✅ Debug data displayed in console above")
-
-    def print_debug_data(self, data):
-        """Print debug data to console in a formatted way"""
-        print("\n" + "="*100)
-        print("🔍 DEBUG: Generated Internal Excel Data")
-        print("="*100)
-        print(f"📊 Total rows extracted: {len(data)}")
-        print()
-        
-        if data:
-            # Show column headers
-            columns = list(data[0].keys())
-            print("📋 Columns found:")
-            for i, col in enumerate(columns, 1):
-                print(f"   {i:2d}. {col}")
-            print()
-            
-            # Show sample data
-            print("📄 Sample data (first 5 rows):")
-            print("-" * 100)
-            
-            # Create header row
-            header = " | ".join([f"{col[:12]:<12}" for col in columns])
-            print(f"Row | {header}")
-            print("-" * 100)
-            
-            # Show data rows
-            for i, row in enumerate(data[:5]):
-                row_data = []
-                for col in columns:
-                    value = str(row.get(col, ''))[:12]
-                    row_data.append(f"{value:<12}")
-                row_str = " | ".join(row_data)
-                print(f"{i+1:3d} | {row_str}")
-            
-            if len(data) > 5:
-                print(f"... and {len(data) - 5} more rows")
-            
-            print("-" * 100)
-            
-            # Show summary statistics
-            print("📈 Summary:")
-            print(f"   • Orders found: {len(set(row.get('ordernumber', '') for row in data if row.get('ordernumber')))}")
-            print(f"   • Routes found: {len(set(row.get('route', '') for row in data if row.get('route')))}")
-            print(f"   • Sites found: {len(set(row.get('sitename', '') for row in data if row.get('sitename')))}")
-            
-        else:
-            print("❌ No data extracted!")
-        
-        print("="*100)
 
     def check_ocr_setup(self):
         """Check if OCR setup is completed, prompt for setup if not"""
@@ -3500,23 +3244,18 @@ class DispatchScanningApp(QMainWindow):
     # Processing methods
     def process_picking_dockets(self):
         """Process picking dockets with reversed page order and upload Excel to database"""
-        # Check for store orders (either from Excel file or internal data)
-        has_excel_file = hasattr(self, 'selected_excel_file') and self.selected_excel_file
-        has_internal_data = hasattr(self, 'internal_excel_data') and self.internal_excel_data
-        has_order_numbers = hasattr(self, 'excel_order_numbers') and self.excel_order_numbers
-        
-        has_store_orders = (has_excel_file or has_internal_data) and has_order_numbers
+        # Check for Excel file (store orders)
+        has_store_orders = self.selected_excel_file and self.excel_order_numbers
         
         if not has_store_orders:
             QMessageBox.warning(
                 self, 
-                "No Store Order Data", 
-                "Please select a Store Order Excel File or use the unified flow:\n\n"
-                "The application needs store order data to:\n"
-                "• Upload data to database in exact order\n"
-                "• Generate barcodes for order numbers\n"
-                "• Match picking dockets to order numbers\n\n"
-                "Use the unified flow to process picking sheets directly."
+                "No Excel File", 
+                "Please select a Store Order Excel File:\n\n"
+                "The application needs an Excel file to:\n"
+                "• Upload data to database in exact Excel row order\n"
+                "• Generate barcodes for order numbers in Column A\n"
+                "• Match picking dockets to order numbers"
             )
             return
         
@@ -3734,29 +3473,16 @@ class DispatchScanningApp(QMainWindow):
         try:
             # STEP 1: Upload to Supabase
             if SUPABASE_AVAILABLE:
-                # Upload Store Orders (if selected or if we have internal data)
-                if getattr(self, 'selected_excel_file', "") or getattr(self, 'internal_excel_data', []):
-                    self.processing_thread.progress_signal.emit("📤 Uploading store order data to database...")
+                # Upload Store Orders (if selected)
+                if getattr(self, 'selected_excel_file', ""):
+                    self.processing_thread.progress_signal.emit("📤 Uploading store order Excel file to database...")
                     try:
-                        # Use internal data if available, otherwise read from Excel file
-                        if hasattr(self, 'internal_excel_data') and self.internal_excel_data:
-                            self.processing_thread.progress_signal.emit(f"Using internal Excel data with {len(self.internal_excel_data)} rows...")
-                            store_order_data = self.internal_excel_data
-                            file_name = "Internal_Excel_Data"
-                        else:
-                            # Read Excel file maintaining row order
-                            excel_file_path = getattr(self, 'selected_excel_file', "")
-                            if excel_file_path:
-                                self.processing_thread.progress_signal.emit(f"Reading {Path(excel_file_path).name} and preserving Excel row order...")
-                                df = pd.read_excel(excel_file_path)
-                                
-                                # Convert DataFrame to list of dictionaries (preserves row order)
-                                store_order_data = df.to_dict('records')
-                                file_name = Path(excel_file_path).name
-                            else:
-                                self.processing_thread.progress_signal.emit("⚠️ No Excel file or internal data available - skipping database upload")
-                                store_order_data = []
-                                file_name = "None"
+                        # Read Excel file maintaining row order
+                        self.processing_thread.progress_signal.emit(f"Reading {Path(self.selected_excel_file).name} and preserving Excel row order...")
+                        df = pd.read_excel(self.selected_excel_file)
+                        
+                        # Convert DataFrame to list of dictionaries (preserves row order)
+                        store_order_data = df.to_dict('records')
                         
                         self.processing_thread.progress_signal.emit(f"Uploading {len(store_order_data)} rows to dispatch_orders table in picking sequence order...")
                         
@@ -3770,14 +3496,14 @@ class DispatchScanningApp(QMainWindow):
                             sample_row = store_order_data[0]
                             self.processing_thread.progress_signal.emit(f"📋 Sample row columns: {list(sample_row.keys())}")
                         
-                        success = upload_store_orders_from_excel(store_order_data, file_name, created_at_override=created_at_iso)
+                        success = upload_store_orders_from_excel(store_order_data, Path(self.selected_excel_file).name, created_at_override=created_at_iso)
                         
                         if success:
-                            self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {file_name} to database with Excel order preserved!")
+                            self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {Path(self.selected_excel_file).name} to database with Excel order preserved!")
                         else:
-                            self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload {file_name} to database - continuing with picking docket processing")
+                            self.processing_thread.progress_signal.emit(f"⚠️ Failed to upload {Path(self.selected_excel_file).name} to database - continuing with picking docket processing")
                     except Exception as e:
-                        self.processing_thread.progress_signal.emit(f"⚠️ Error uploading Excel data to database: {str(e)} - continuing with picking docket processing")
+                        self.processing_thread.progress_signal.emit(f"⚠️ Error uploading Excel file to database: {str(e)} - continuing with picking docket processing")
             else:
                 self.processing_thread.progress_signal.emit("⚠️ Supabase not available - skipping database upload")
             
@@ -4256,9 +3982,8 @@ class DispatchScanningApp(QMainWindow):
                 f.write("=" * 50 + "\n\n")
                 f.write(f"Processing Date: {current_date}\n")
                 f.write(f"Output Directory: {output_dir}\n")
-                excel_file_path = getattr(self, 'selected_excel_file', "")
-                if excel_file_path:
-                    f.write(f"Store Orders Excel file: {Path(excel_file_path).name}\n")
+                if getattr(self, 'selected_excel_file', ""):
+                    f.write(f"Store Orders Excel file: {Path(self.selected_excel_file).name}\n")
                 f.write(f"Database upload: {'✅ Success' if SUPABASE_AVAILABLE else '❌ Supabase not available'}\n")
                 f.write(f"Unique order numbers from Excel files: {len(unique_order_numbers)}\n")
                 f.write(f"Total picking docket PDF files processed: {processed_files}\n")
@@ -4295,8 +4020,7 @@ class DispatchScanningApp(QMainWindow):
                     f.write(f"  - '{order_id}': {page_count} pages found and barcoded\n")
                 f.write("\n")
                 f.write("WORKFLOW COMPLETED:\n")
-                excel_file_path = getattr(self, 'selected_excel_file', "")
-                if excel_file_path:
+                if getattr(self, 'selected_excel_file', ""):
                     f.write(f"1. 📤 Uploaded store orders to dispatch_orders table (Excel row order preserved)\n")
                 f.write(f"2. 🏷️  Generated barcodes for {len(order_barcodes)} unique order numbers from Excel files\n")
                 f.write(f"3. 📄 Added barcodes to pages in original PDF files where order numbers were found\n")
@@ -4346,7 +4070,7 @@ class DispatchScanningApp(QMainWindow):
                 "order_numbers_found_in_pdfs": list(order_numbers_found_in_pdfs),
                 "order_numbers_not_found": list(set(unique_order_numbers) - order_numbers_found_in_pdfs),
                 "database_upload": SUPABASE_AVAILABLE,
-                "excel_file": Path(excel_file_path).name if excel_file_path else "None"
+                "excel_file": Path(self.selected_excel_file).name if self.selected_excel_file else "None"
             }
             
         except Exception as e:
@@ -4367,18 +4091,96 @@ class DispatchScanningApp(QMainWindow):
             self.progress_bar.setValue(1)
     
     def apply_clean_styling(self):
-        """Apply professional, compact business styling"""
+        """Apply clean, minimal styling"""
         self.setStyleSheet("""
-            /* Main Application Styling */
             QMainWindow {
-                background-color: #f5f5f5;
-                font-family: 'Segoe UI', 'Arial', sans-serif;
+                background-color: #f8fafc;
             }
             
-            /* Header Styling */
-            QFrame#headerFrame {
-                background-color: #3498db;
+            QTabWidget#mainTabWidget {
+                background-color: transparent;
+            }
+            
+            QTabWidget#mainTabWidget::pane {
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                background-color: white;
+                margin-top: 5px;
+            }
+            
+            QTabBar::tab {
+                background-color: #f1f5f9;
+                border: 1px solid #e2e8f0;
+                border-bottom: none;
+                border-radius: 8px 8px 0 0;
+                padding: 12px 20px;
+                margin-right: 3px;
+                color: #64748b;
+                font-weight: 600;
+                font-size: 13px;
+                min-width: 120px;
+            }
+            
+            QTabBar::tab:selected {
+                background-color: white;
+                color: #1e293b;
+                border-bottom: 2px solid #2563eb;
+            }
+            
+            QTabBar::tab:hover {
+                background-color: #e2e8f0;
+                color: #374151;
+            }
+            
+            QFrame#stepFrame {
+                background-color: #f8fafc;
+                border: 2px solid #e2e8f0;
+                border-radius: 8px;
+                border-left: 4px solid #2563eb;
+                margin-bottom: 8px;
+            }
+            
+            QFrame#uploadSection {
+                background-color: #f0f9ff;
+                border: 2px solid #0ea5e9;
+                border-radius: 12px;
+                border-left: 5px solid #0ea5e9;
+            }
+            
+            QLabel#stepNumber {
+                font-weight: bold;
+                color: #2563eb;
+                font-size: 12px;
+                background-color: #dbeafe;
+                padding: 4px 8px;
+                border-radius: 4px;
+                border: 1px solid #93c5fd;
+            }
+            
+            QLabel#stepDescription {
+                color: #374151;
+                font-size: 12px;
+                padding: 4px 0px;
+            }
+            
+            QLabel#stepHeader {
+                color: #1e40af;
+                font-size: 16px;
+                font-weight: bold;
+                margin-bottom: 8px;
+            }
+            
+            QScrollArea {
                 border: none;
+                background-color: transparent;
+            }
+            
+            QScrollArea QWidget {
+                background-color: transparent;
+            }
+            
+            QFrame#headerFrame {
+                background-color: #2563eb;
                 border-radius: 0px;
                 margin-bottom: 0px;
             }
@@ -4386,248 +4188,173 @@ class DispatchScanningApp(QMainWindow):
             QLabel#headerTitle {
                 color: white;
                 font-size: 22px;
-                font-weight: 600;
+                font-weight: bold;
             }
             
             QLabel#headerSubtitle {
-                color: #bdc3c7;
+                color: #e2e8f0;
                 font-size: 13px;
-                font-weight: 400;
             }
             
-            QLabel#headerIcon {
-                font-size: 16px;
-                color: white;
-                background-color: #34495e;
-                border-radius: 4px;
-                padding: 4px;
-                min-width: 24px;
-                max-width: 24px;
-                min-height: 24px;
-                max-height: 24px;
-            }
-            
-            QLabel#statusDot {
-                color: #27ae60;
-                font-size: 8px;
-                background-color: #34495e;
-                border-radius: 50%;
-                padding: 2px;
-                min-width: 12px;
-                max-width: 12px;
-                min-height: 12px;
-                max-height: 12px;
-            }
-            
-            QLabel#statusText {
-                color: #bdc3c7;
-                font-size: 11px;
-                font-weight: 400;
-            }
-            
-            /* Column Frames */
             QFrame#columnFrame {
                 background-color: transparent;
-                border: none;
             }
             
-            /* Section Cards - Professional Design */
             QFrame#section {
                 background-color: white;
-                border: 1px solid #d5d5d5;
-                border-radius: 4px;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
                 padding: 12px;
-                margin-bottom: 8px;
+                margin-bottom: 3px;
             }
             
-            /* Typography */
             QLabel {
-                color: #2c3e50;
-                font-size: 13px;
-                font-weight: 400;
+                color: #374151;
+                font-size: 12px;
             }
             
             QLabel#sectionTitle {
-                color: #2c3e50;
-                font-size: 16px;
-                font-weight: 600;
-                margin-bottom: 4px;
+                color: #1e293b;
+                font-size: 15px;
+                font-weight: bold;
+                margin-bottom: 5px;
             }
             
             QLabel#sectionSubtitle {
-                color: #7f8c8d;
+                color: #6b7280;
                 font-size: 12px;
-                font-style: normal;
+                font-style: italic;
                 margin-bottom: 8px;
             }
             
-            QLabel#sectionIcon {
-                font-size: 12px;
-                background-color: #3498db;
-                color: white;
-                border-radius: 3px;
-                padding: 4px;
-                min-width: 20px;
-                max-width: 20px;
-                min-height: 20px;
-                max-height: 20px;
-                text-align: center;
-                qproperty-alignment: AlignCenter;
-            }
-            
             QLabel#workflowText {
-                color: #2c3e50;
-                font-size: 12px;
-                line-height: 1.3;
+                color: #374151;
+                font-size: 13px;
+                line-height: 1.4;
                 padding: 8px;
-                background-color: #f8f9fa;
-                border-radius: 3px;
-                border-left: 3px solid #3498db;
-                margin: 4px 0;
+                background-color: #f8fafc;
+                border-radius: 6px;
+                border-left: 4px solid #2563eb;
             }
             
             QLabel#requirementsText {
-                color: #2c3e50;
+                color: #374151;
                 font-size: 12px;
-                line-height: 1.3;
+                line-height: 1.4;
                 padding: 8px;
-                background-color: #f8f9fa;
-                border-radius: 3px;
-                border-left: 3px solid #3498db;
-                margin: 4px 0;
+                background-color: #f8fafc;
+                border-radius: 6px;
+                border-left: 4px solid #10b981;
             }
             
             QLabel#infoText {
-                color: #7f8c8d;
+                color: #64748b;
                 font-size: 12px;
-                padding: 6px 8px;
-                background-color: #f8f9fa;
-                border-radius: 3px;
-                border: 1px solid #e9ecef;
+                padding: 8px;
+                background-color: #f1f5f9;
+                border-radius: 4px;
             }
             
             QLabel#warningText {
-                color: #e67e22;
+                color: #d97706;
                 font-size: 12px;
-                padding: 6px 8px;
-                background-color: #fef9e7;
-                border-radius: 3px;
+                padding: 8px;
+                background-color: #fef3c7;
+                border-radius: 4px;
                 font-weight: 500;
-                border: 1px solid #f39c12;
             }
             
             QLabel#successText {
-                color: #27ae60;
+                color: #059669;
                 font-size: 12px;
-                padding: 6px 8px;
-                background-color: #eafaf1;
-                border-radius: 3px;
+                padding: 8px;
+                background-color: #d1fae5;
+                border-radius: 4px;
                 font-weight: 500;
-                border: 1px solid #2ecc71;
             }
             
-            /* Button Styling - Professional */
             QPushButton {
-                background-color: #ecf0f1;
-                color: #2c3e50;
-                border: 1px solid #bdc3c7;
-                padding: 6px 12px;
-                border-radius: 3px;
+                background-color: #e2e8f0;
+                color: #374151;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
                 font-weight: 500;
-                font-size: 13px;
                 min-height: 20px;
+                font-size: 12px;
             }
             
             QPushButton:hover {
-                background-color: #d5dbdb;
-                border-color: #95a5a6;
+                background-color: #cbd5e1;
             }
             
-            QPushButton:pressed {
-                background-color: #bdc3c7;
-            }
-            
-            /* Primary Button */
             QPushButton#primaryButton {
-                background-color: #3498db;
+                background-color: #2563eb;
                 color: white;
-                border: 1px solid #2980b9;
-                padding: 8px 16px;
-                border-radius: 3px;
-                font-weight: 600;
-                font-size: 13px;
-                min-height: 24px;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 14px;
+                min-height: 45px;
             }
             
             QPushButton#primaryButton:hover {
-                background-color: #2980b9;
+                background-color: #1d4ed8;
             }
             
             QPushButton#primaryButton:pressed {
-                background-color: #21618c;
+                background-color: #1e40af;
             }
             
-            /* Secondary Button */
             QPushButton#secondaryButton {
-                background-color: #95a5a6;
+                background-color: #6b7280;
                 color: white;
-                border: 1px solid #7f8c8d;
             }
             
             QPushButton#secondaryButton:hover {
-                background-color: #7f8c8d;
+                background-color: #4b5563;
             }
             
-            /* Input Fields */
             QLineEdit, QDateEdit {
-                border: 1px solid #bdc3c7;
-                border-radius: 3px;
-                padding: 6px 8px;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 8px 12px;
                 background-color: white;
-                color: #2c3e50;
-                font-size: 13px;
+                color: #374151;
+                font-size: 12px;
             }
             
             QLineEdit:focus, QDateEdit:focus {
-                border-color: #3498db;
+                border-color: #2563eb;
                 outline: none;
             }
             
-            QLineEdit:hover, QDateEdit:hover {
-                border-color: #95a5a6;
-            }
-            
-            /* List and Table Widgets */
             QListWidget, QTableWidget {
-                border: 1px solid #bdc3c7;
-                border-radius: 3px;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
                 background-color: white;
-                color: #2c3e50;
-                alternate-background-color: #f8f9fa;
-                font-size: 13px;
+                color: #374151;
+                alternate-background-color: #f8fafc;
             }
             
-            QListWidget:focus, QTableWidget:focus {
-                border-color: #3498db;
-                outline: none;
-            }
-            
-            /* Scrollbar Styling - Minimal */
+            /* Scrollbar Styling */
             QScrollBar:vertical {
-                background-color: #ecf0f1;
+                background-color: #f8fafc;
                 width: 12px;
                 border: none;
                 border-radius: 6px;
             }
             
             QScrollBar::handle:vertical {
-                background-color: #bdc3c7;
+                background-color: #cbd5e1;
                 border-radius: 6px;
                 min-height: 20px;
+                margin: 2px;
             }
             
             QScrollBar::handle:vertical:hover {
-                background-color: #95a5a6;
+                background-color: #94a3b8;
             }
             
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
@@ -4640,20 +4367,21 @@ class DispatchScanningApp(QMainWindow):
             }
             
             QScrollBar:horizontal {
-                background-color: #ecf0f1;
+                background-color: #f8fafc;
                 height: 12px;
                 border: none;
                 border-radius: 6px;
             }
             
             QScrollBar::handle:horizontal {
-                background-color: #bdc3c7;
+                background-color: #cbd5e1;
                 border-radius: 6px;
                 min-width: 20px;
+                margin: 2px;
             }
             
             QScrollBar::handle:horizontal:hover {
-                background-color: #95a5a6;
+                background-color: #94a3b8;
             }
             
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
@@ -4665,111 +4393,98 @@ class DispatchScanningApp(QMainWindow):
                 background: none;
             }
             
-            /* Table Styling */
             QTableWidget::item {
-                padding: 6px 8px;
-                border-bottom: 1px solid #ecf0f1;
-                font-size: 13px;
+                padding: 8px;
+                border-bottom: 1px solid #f1f5f9;
             }
             
             QTableWidget::item:selected {
-                background-color: #e3f2fd;
-                color: #1976d2;
+                background-color: #eff6ff;
+                color: #1e40af;
             }
             
             QTableWidget QHeaderView::section {
-                background-color: #f8f9fa;
+                background-color: #f8fafc;
                 border: none;
-                border-bottom: 1px solid #bdc3c7;
-                padding: 6px 8px;
+                border-bottom: 1px solid #e2e8f0;
+                padding: 8px;
                 font-weight: 600;
-                color: #2c3e50;
-                font-size: 13px;
+                color: #374151;
             }
             
-            /* Status Bar */
             QStatusBar {
-                background-color: #ecf0f1;
-                border-top: 1px solid #bdc3c7;
-                color: #2c3e50;
-                font-size: 13px;
-                font-weight: 400;
+                background-color: #f1f5f9;
+                border-top: 1px solid #e2e8f0;
+                color: #374151;
             }
             
-            /* Progress Bar */
             QProgressBar {
-                border: 1px solid #bdc3c7;
-                border-radius: 3px;
+                border: 1px solid #d1d5db;
+                border-radius: 4px;
                 text-align: center;
                 background-color: white;
-                color: #2c3e50;
-                font-weight: 500;
-                font-size: 13px;
+                color: #374151;
             }
             
             QProgressBar::chunk {
-                background-color: #3498db;
-                border-radius: 2px;
+                background-color: #2563eb;
+                border-radius: 3px;
             }
             
             /* Message Box Styling */
             QMessageBox {
                 background-color: white;
-                color: #2c3e50;
-                border: 1px solid #bdc3c7;
-                border-radius: 4px;
-                padding: 16px;
-                font-size: 12px;
+                color: #374151;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 20px;
+                font-size: 14px;
             }
             
             QMessageBox QLabel {
                 background-color: transparent;
-                color: #2c3e50;
-                font-size: 12px;
-                padding: 8px;
-                font-weight: 400;
+                color: #374151;
+                font-size: 14px;
+                padding: 10px;
             }
             
             QMessageBox QPushButton {
-                background-color: #3498db;
+                background-color: #2563eb;
                 color: white;
-                border: 1px solid #2980b9;
-                padding: 8px 16px;
-                border-radius: 3px;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
                 font-weight: 500;
-                font-size: 11px;
-                min-width: 60px;
+                font-size: 14px;
+                min-width: 80px;
             }
             
             QMessageBox QPushButton:hover {
-                background-color: #2980b9;
+                background-color: #1d4ed8;
             }
             
             QMessageBox QPushButton:pressed {
-                background-color: #21618c;
+                background-color: #1e40af;
             }
             
-            /* Special Labels */
             QLabel#descriptionLabel {
-                color: #7f8c8d;
-                font-size: 12px;
-                margin-bottom: 12px;
-                line-height: 1.4;
+                color: #6b7280;
+                font-size: 14px;
+                margin-bottom: 20px;
             }
             
             QFrame#placeholderFrame {
-                background-color: #f8f9fa;
-                border: 1px dashed #bdc3c7;
-                border-radius: 4px;
-                padding: 24px;
-                margin: 12px 0;
+                background-color: #f8fafc;
+                border: 2px dashed #cbd5e1;
+                border-radius: 8px;
+                padding: 40px;
+                margin: 20px 0;
             }
             
             QLabel#placeholderLabel {
-                color: #95a5a6;
-                font-size: 12px;
+                color: #94a3b8;
+                font-size: 16px;
                 font-style: italic;
-                font-weight: 400;
             }
             
             QFrame#infoFrame {
