@@ -40,6 +40,12 @@ from barcode.writer import ImageWriter
 import hashlib
 import requests
 from datetime import datetime, timedelta
+import serial
+import time
+import subprocess
+import tempfile
+import win32print
+import win32api
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -1602,6 +1608,785 @@ class MultiRegionCoordinateSelectorDialog(QDialog):
             self.accept()
 
 
+class CrateCountDialog(QDialog):
+    """Dialog for selecting number of crates to print"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Number of Crates")
+        self.setModal(True)
+        self.resize(400, 200)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        
+        # Set white background for the dialog
+        self.setStyleSheet("""
+            QDialog {
+                background-color: white;
+                color: black;
+            }
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Title
+        title_label = QLabel("How many crate labels do you want to print?")
+        title_label.setObjectName("crateDialogTitle")
+        title_label.setStyleSheet("""
+            QLabel#crateDialogTitle {
+                font-size: 16px;
+                font-weight: bold;
+                color: black;
+                padding: 10px;
+                background-color: white;
+            }
+        """)
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        # Crate count selection
+        self.crate_spinbox = QComboBox()
+        self.crate_spinbox.setObjectName("crateDialogSpinbox")
+        self.crate_spinbox.addItems([str(i) for i in range(1, 21)])  # 1-20 crates
+        self.crate_spinbox.setCurrentText("1")
+        self.crate_spinbox.setStyleSheet("""
+            QComboBox#crateDialogSpinbox {
+                background-color: white;
+                color: black;
+                border: 3px solid #3498db;
+                border-radius: 8px;
+                padding: 12px 16px;
+                font-size: 18px;
+                font-weight: bold;
+                min-width: 120px;
+                min-height: 30px;
+            }
+            QComboBox#crateDialogSpinbox:focus {
+                border-color: #2980b9;
+                background-color: white;
+                color: black;
+            }
+            QComboBox#crateDialogSpinbox::drop-down {
+                background-color: white;
+                border: none;
+            }
+            QComboBox#crateDialogSpinbox QAbstractItemView {
+                background-color: white;
+                color: black;
+                border: 1px solid #3498db;
+            }
+        """)
+        layout.addWidget(self.crate_spinbox, alignment=Qt.AlignCenter)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("cancelButton")
+        cancel_button.setStyleSheet("""
+            QPushButton#cancelButton {
+                background-color: #f8f9fa;
+                color: black;
+                border: 2px solid #6c757d;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton#cancelButton:hover {
+                background-color: #e9ecef;
+            }
+        """)
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+        
+        print_button = QPushButton("Print Labels")
+        print_button.setObjectName("printDialogButton")
+        print_button.setStyleSheet("""
+            QPushButton#printDialogButton {
+                background-color: #28a745;
+                color: white;
+                border: 2px solid #28a745;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton#printDialogButton:hover {
+                background-color: #218838;
+            }
+        """)
+        print_button.clicked.connect(self.accept)
+        print_button.setDefault(True)
+        button_layout.addWidget(print_button)
+        
+        layout.addLayout(button_layout)
+        
+        # Set focus to spinbox
+        self.crate_spinbox.setFocus()
+    
+    def keyPressEvent(self, event):
+        """Handle key press events"""
+        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            self.accept()
+        elif event.key() == Qt.Key_Escape:
+            self.reject()
+        else:
+            super().keyPressEvent(event)
+    
+    def get_crate_count(self):
+        """Get the selected crate count"""
+        return int(self.crate_spinbox.currentText())
+
+
+class LabelPreviewDialog(QDialog):
+    """Dialog for previewing label layout"""
+    
+    def __init__(self, zpl_code, order_number, dispatchcode, site_name, route, crate_number, total_crates, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Label Preview")
+        self.setModal(True)
+        self.resize(600, 800)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Title
+        title_label = QLabel("Label Preview")
+        title_label.setObjectName("previewTitle")
+        title_label.setStyleSheet("""
+            QLabel#previewTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #2c3e50;
+                margin-bottom: 10px;
+            }
+        """)
+        layout.addWidget(title_label)
+        
+        # Label preview area
+        preview_frame = QFrame()
+        preview_frame.setObjectName("previewFrame")
+        preview_frame.setStyleSheet("""
+            QFrame#previewFrame {
+                background-color: white;
+                border: 2px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 20px;
+            }
+        """)
+        preview_layout = QVBoxLayout(preview_frame)
+        
+        # Create a visual representation of the label
+        self.create_label_preview(preview_layout, order_number, dispatchcode, site_name, route, crate_number, total_crates)
+        
+        layout.addWidget(preview_frame)
+        
+        # ZPL code section
+        zpl_group = QGroupBox("ZPL Code")
+        zpl_group.setObjectName("zplGroup")
+        zpl_layout = QVBoxLayout(zpl_group)
+        
+        self.zpl_text = QTextEdit()
+        self.zpl_text.setObjectName("zplText")
+        self.zpl_text.setMaximumHeight(150)
+        self.zpl_text.setReadOnly(True)
+        self.zpl_text.setPlainText(zpl_code)
+        self.zpl_text.setStyleSheet("""
+            QTextEdit#zplText {
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-size: 10px;
+            }
+        """)
+        zpl_layout.addWidget(self.zpl_text)
+        
+        layout.addWidget(zpl_group)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        close_button = QPushButton("Close")
+        close_button.setObjectName("closeButton")
+        close_button.clicked.connect(self.accept)
+        button_layout.addWidget(close_button)
+        
+        layout.addLayout(button_layout)
+    
+    def create_label_preview(self, layout, order_number, dispatchcode, site_name, route, crate_number, total_crates):
+        """Create a visual preview of the label"""
+        # Calculate label dimensions (6.5cm x 13.5cm scaled down for preview)
+        label_width = 260  # Scaled down from 520 dots
+        label_height = 540  # Scaled down from 1080 dots
+        
+        # Create a custom widget for the label preview
+        label_widget = QWidget()
+        label_widget.setFixedSize(label_width, label_height)
+        label_widget.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border: 1px solid #333;
+            }
+        """)
+        
+        # Add label content using QLabel widgets positioned absolutely
+        label_widget.setLayout(QVBoxLayout())
+        label_widget.layout().setContentsMargins(10, 10, 10, 10)
+        label_widget.layout().setSpacing(5)
+        
+        # Dispatch code (top, 20% empty space, center aligned)
+        dispatch_label = QLabel(dispatchcode)
+        dispatch_label.setStyleSheet("font-size: 16px; font-weight: bold; color: black;")
+        dispatch_label.setAlignment(Qt.AlignCenter)
+        label_widget.layout().addWidget(dispatch_label)
+        
+        # Separator line
+        line1 = QFrame()
+        line1.setFrameShape(QFrame.HLine)
+        line1.setStyleSheet("color: #333;")
+        label_widget.layout().addWidget(line1)
+        
+        # Site Name section (no header)
+        
+        # Handle long site names (matching ZPL logic - max 2 lines)
+        site_name_lines = []
+        max_chars_per_line = 25  # Match ZPL logic
+        
+        if len(site_name) > max_chars_per_line:
+            words = site_name.split()
+            current_line = ""
+            for word in words:
+                if len(current_line + " " + word) <= max_chars_per_line:
+                    current_line += (" " + word) if current_line else word
+                else:
+                    if current_line:
+                        site_name_lines.append(current_line)
+                    current_line = word
+                    # Limit to maximum 2 lines
+                    if len(site_name_lines) >= 2:
+                        # If we already have 2 lines, truncate the remaining text
+                        remaining_text = " ".join([current_line] + words[words.index(word):])
+                        if len(remaining_text) > 15:
+                            remaining_text = remaining_text[:12] + "..."
+                        site_name_lines.append(remaining_text)
+                        break
+            if current_line and len(site_name_lines) < 2:
+                site_name_lines.append(current_line)
+        else:
+            site_name_lines = [site_name]
+        
+        for line in site_name_lines:
+            site_value_label = QLabel(line)
+            site_value_label.setStyleSheet("font-size: 18px; font-weight: bold; color: black;")
+            label_widget.layout().addWidget(site_value_label)
+        
+        # Separator line
+        line2 = QFrame()
+        line2.setFrameShape(QFrame.HLine)
+        line2.setStyleSheet("color: #333;")
+        label_widget.layout().addWidget(line2)
+        
+        # Date (center aligned) - use selected date from parent
+        current_date = self.parent().selected_date if hasattr(self.parent(), 'selected_date') else datetime.now().strftime("%m/%d/%Y")
+        date_label = QLabel(current_date)
+        date_label.setStyleSheet("font-size: 10px; color: black;")
+        date_label.setAlignment(Qt.AlignCenter)
+        label_widget.layout().addWidget(date_label)
+        
+        # Separator line
+        line3 = QFrame()
+        line3.setFrameShape(QFrame.HLine)
+        line3.setStyleSheet("color: #333;")
+        label_widget.layout().addWidget(line3)
+        
+        # Crate info (center aligned)
+        crate_label = QLabel(f"{crate_number} of {total_crates}")
+        crate_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #0066cc;")
+        crate_label.setAlignment(Qt.AlignCenter)
+        label_widget.layout().addWidget(crate_label)
+        
+        # Separator line
+        line4 = QFrame()
+        line4.setFrameShape(QFrame.HLine)
+        line4.setStyleSheet("color: #333;")
+        label_widget.layout().addWidget(line4)
+        
+        # Barcode representation (center aligned)
+        barcode_label = QLabel("████████████████████████████████")
+        barcode_label.setStyleSheet("font-size: 8px; color: black; font-family: monospace;")
+        barcode_label.setAlignment(Qt.AlignCenter)
+        label_widget.layout().addWidget(barcode_label)
+        
+        barcode_text_label = QLabel(order_number)
+        barcode_text_label.setStyleSheet("font-size: 10px; color: black; font-family: monospace;")
+        barcode_text_label.setAlignment(Qt.AlignCenter)
+        label_widget.layout().addWidget(barcode_text_label)
+        
+        # Separator line
+        line5 = QFrame()
+        line5.setFrameShape(QFrame.HLine)
+        line5.setStyleSheet("color: #333;")
+        label_widget.layout().addWidget(line5)
+        
+        # Route section (center aligned)
+        route_label = QLabel("Route")
+        route_label.setStyleSheet("font-size: 10px; color: black;")
+        route_label.setAlignment(Qt.AlignCenter)
+        label_widget.layout().addWidget(route_label)
+        
+        # Handle long route names - split into maximum 2 lines with optimized breaking
+        route_lines = []
+        max_route_chars_per_line = 15
+        
+        if len(route) > max_route_chars_per_line:
+            words = route.split()
+            current_line = ""
+            for word in words:
+                if len(current_line + " " + word) <= max_route_chars_per_line:
+                    current_line += (" " + word) if current_line else word
+                else:
+                    if current_line:
+                        route_lines.append(current_line)
+                    current_line = word
+                    # Limit to maximum 2 lines
+                    if len(route_lines) >= 2:
+                        # If we already have 2 lines, truncate the remaining text
+                        remaining_text = " ".join([current_line] + words[words.index(word):])
+                        if len(remaining_text) > 15:
+                            remaining_text = remaining_text[:12] + "..."
+                        route_lines.append(remaining_text)
+                        break
+            if current_line and len(route_lines) < 2:
+                route_lines.append(current_line)
+        else:
+            route_lines = [route]
+        
+        # Dynamic route font sizing based on number of lines and total length
+        num_route_lines = len(route_lines)
+        total_route_length = len(route)
+        
+        if num_route_lines == 1:
+            if total_route_length <= 6:
+                route_font_size = "24px"
+            elif total_route_length <= 10:
+                route_font_size = "22px"
+            elif total_route_length <= 15:
+                route_font_size = "20px"
+            elif total_route_length <= 20:
+                route_font_size = "18px"
+            else:
+                route_font_size = "16px"
+        else:  # 2 lines
+            if total_route_length <= 20:
+                route_font_size = "18px"
+            elif total_route_length <= 30:
+                route_font_size = "16px"
+            else:
+                route_font_size = "14px"
+        
+        for line in route_lines:
+            route_value_label = QLabel(line)
+            route_value_label.setStyleSheet(f"font-size: {route_font_size}; font-weight: bold; color: black;")
+        route_value_label.setAlignment(Qt.AlignCenter)
+        label_widget.layout().addWidget(route_value_label)
+        
+        # Add some spacing at the bottom
+        label_widget.layout().addStretch()
+        
+        layout.addWidget(label_widget, alignment=Qt.AlignCenter)
+
+
+class DateSelectionDialog(QDialog):
+    """Dialog for selecting the date to print on labels"""
+    
+    def __init__(self, current_date, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Date for Labels")
+        self.setModal(True)
+        self.setFixedSize(350, 180)
+        
+        # Set dialog background to white
+        self.setStyleSheet("""
+            QDialog {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+            }
+        """)
+        
+        layout = QVBoxLayout()
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 25, 30, 25)
+        
+        # Title
+        title_label = QLabel("Select Date to Print on Labels")
+        title_label.setObjectName("dateDialogTitle")
+        title_label.setStyleSheet("""
+            QLabel#dateDialogTitle {
+                font-size: 18px;
+                font-weight: 600;
+                color: #2c3e50;
+                padding: 0px;
+                background-color: transparent;
+            }
+        """)
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        # Date selection
+        self.date_edit = QDateEdit()
+        self.date_edit.setDate(QDate.fromString(current_date, "MM/dd/yyyy"))
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setStyleSheet("""
+            QDateEdit {
+                background-color: #f8f9fa;
+                color: #2c3e50;
+                border: 2px solid #e9ecef;
+                border-radius: 6px;
+                padding: 12px 16px;
+                font-size: 16px;
+                font-weight: 500;
+                min-height: 20px;
+            }
+            QDateEdit:focus {
+                border-color: #007bff;
+                background-color: white;
+            }
+            QDateEdit::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 30px;
+                border-left: 1px solid #e9ecef;
+                background-color: #f8f9fa;
+            }
+            QDateEdit::down-arrow {
+                image: none;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-top: 6px solid #6c757d;
+                margin-right: 8px;
+            }
+            QDateEdit::down-arrow:hover {
+                border-top-color: #007bff;
+            }
+        """)
+        layout.addWidget(self.date_edit, alignment=Qt.AlignCenter)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(12)
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 24px;
+                font-size: 14px;
+                font-weight: 500;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #5a6268;
+            }
+            QPushButton:pressed {
+                background-color: #545b62;
+            }
+        """)
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+        
+        ok_button = QPushButton("OK")
+        ok_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 24px;
+                font-size: 14px;
+                font-weight: 500;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+            QPushButton:pressed {
+                background-color: #004085;
+            }
+        """)
+        ok_button.clicked.connect(self.accept)
+        button_layout.addWidget(ok_button)
+        
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+        
+        # Set focus to date edit
+        self.date_edit.setFocus()
+    
+    def get_selected_date(self):
+        """Get the selected date in MM/dd/yyyy format"""
+        return self.date_edit.date().toString("MM/dd/yyyy")
+
+
+class ManualLabelDialog(QDialog):
+    """Dialog for manually entering label information"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Manual Label Printing")
+        self.setModal(True)
+        self.setFixedSize(450, 600)
+        
+        # Set dialog background to white
+        self.setStyleSheet("""
+            QDialog {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+            }
+        """)
+        
+        layout = QVBoxLayout()
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 25, 30, 25)
+        
+        # Title
+        title_label = QLabel("Manual Label Information")
+        title_label.setObjectName("manualLabelTitle")
+        title_label.setStyleSheet("""
+            QLabel#manualLabelTitle {
+                font-size: 18px;
+                font-weight: 600;
+                color: #2c3e50;
+                padding: 0px;
+                background-color: transparent;
+            }
+        """)
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        # Form fields
+        form_layout = QVBoxLayout()
+        form_layout.setSpacing(15)
+        
+        # Order Number
+        self.order_number_input = QLineEdit()
+        self.order_number_input.setPlaceholderText("Enter order number")
+        self.order_number_input.setStyleSheet("""
+            QLineEdit {
+                background-color: white;
+                color: black;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 20px 16px;
+                font-size: 16px;
+                font-weight: normal;
+                min-height: 25px;
+                selection-background-color: #3b82f6;
+                selection-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #3b82f6;
+                background-color: white;
+                color: black;
+                outline: none;
+            }
+            QLineEdit:hover {
+                border-color: #9ca3af;
+            }
+        """)
+        form_layout.addWidget(self.order_number_input)
+        
+        # Site Name
+        self.site_name_input = QLineEdit()
+        self.site_name_input.setPlaceholderText("Enter site name")
+        self.site_name_input.setStyleSheet("""
+            QLineEdit {
+                background-color: white;
+                color: black;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 20px 16px;
+                font-size: 16px;
+                font-weight: normal;
+                min-height: 25px;
+                selection-background-color: #3b82f6;
+                selection-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #3b82f6;
+                background-color: white;
+                color: black;
+                outline: none;
+            }
+            QLineEdit:hover {
+                border-color: #9ca3af;
+            }
+        """)
+        form_layout.addWidget(self.site_name_input)
+        
+        # Route
+        self.route_input = QLineEdit()
+        self.route_input.setPlaceholderText("Enter route")
+        self.route_input.setStyleSheet("""
+            QLineEdit {
+                background-color: white;
+                color: black;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 20px 16px;
+                font-size: 16px;
+                font-weight: normal;
+                min-height: 25px;
+                selection-background-color: #3b82f6;
+                selection-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #3b82f6;
+                background-color: white;
+                color: black;
+                outline: none;
+            }
+            QLineEdit:hover {
+                border-color: #9ca3af;
+            }
+        """)
+        form_layout.addWidget(self.route_input)
+        
+        # Dispatch Code
+        self.dispatch_code_input = QLineEdit()
+        self.dispatch_code_input.setPlaceholderText("Enter dispatch code")
+        self.dispatch_code_input.setStyleSheet("""
+            QLineEdit {
+                background-color: white;
+                color: black;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 20px 16px;
+                font-size: 16px;
+                font-weight: normal;
+                min-height: 25px;
+                selection-background-color: #3b82f6;
+                selection-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #3b82f6;
+                background-color: white;
+                color: black;
+                outline: none;
+            }
+            QLineEdit:hover {
+                border-color: #9ca3af;
+            }
+        """)
+        form_layout.addWidget(self.dispatch_code_input)
+        
+        # Crate Count
+        self.crate_count_input = QLineEdit()
+        self.crate_count_input.setPlaceholderText("Enter number of crates")
+        self.crate_count_input.setText("1")
+        self.crate_count_input.setStyleSheet("""
+            QLineEdit {
+                background-color: white;
+                color: black;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 20px 16px;
+                font-size: 16px;
+                font-weight: normal;
+                min-height: 25px;
+                selection-background-color: #3b82f6;
+                selection-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #3b82f6;
+                background-color: white;
+                color: black;
+                outline: none;
+            }
+            QLineEdit:hover {
+                border-color: #9ca3af;
+            }
+        """)
+        form_layout.addWidget(self.crate_count_input)
+        
+        layout.addLayout(form_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(20)
+        button_layout.setContentsMargins(0, 20, 0, 0)  # Add top margin for spacing
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 12px 28px;
+                font-size: 14px;
+                font-weight: 500;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #5a6268;
+            }
+            QPushButton:pressed {
+                background-color: #545b62;
+            }
+        """)
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+        
+        print_button = QPushButton("Print Labels")
+        print_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 12px 28px;
+                font-size: 14px;
+                font-weight: 500;
+                min-width: 120px;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+            QPushButton:pressed {
+                background-color: #004085;
+            }
+        """)
+        print_button.clicked.connect(self.accept)
+        button_layout.addWidget(print_button)
+        
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+        
+        # Set focus to first input
+        self.order_number_input.setFocus()
+    
+    def get_label_data(self):
+        """Get the entered label data"""
+        return {
+            'order_number': self.order_number_input.text().strip(),
+            'site_name': self.site_name_input.text().strip(),
+            'route': self.route_input.text().strip(),
+            'dispatch_code': self.dispatch_code_input.text().strip(),
+            'crate_count': int(self.crate_count_input.text()) if self.crate_count_input.text().isdigit() else 1
+        }
+
+
 class DispatchScanningApp(QMainWindow):
     """Upload Excel Files, Process PDFs, Generate Barcodes"""
     
@@ -1630,6 +2415,9 @@ class DispatchScanningApp(QMainWindow):
         # Unified flow data
         self.internal_excel_data = []  # Store Excel data internally instead of generating file
         self.picking_sheet_files = []  # Store picking sheet PDF files
+        
+        # Label printing data
+        self.selected_date = datetime.now().strftime("%m/%d/%Y")  # Default to current date
         
         # OCR Configuration - Multiple regions (hardcoded coordinates)
         self.ocr_regions = {
@@ -1736,6 +2524,10 @@ class DispatchScanningApp(QMainWindow):
         # Tab 2: Order Management (new functionality)
         order_management_tab = self.create_order_management_tab()
         tab_widget.addTab(order_management_tab, "Order Management")
+        
+        # Tab 3: Label Printing (new functionality)
+        label_printing_tab = self.create_label_printing_tab()
+        tab_widget.addTab(label_printing_tab, "Label Printing")
         
         return tab_widget
     
@@ -1951,6 +2743,1038 @@ class DispatchScanningApp(QMainWindow):
         """Refresh the order data from Supabase"""
         self.load_order_data()
     
+    def create_label_printing_tab(self):
+        """Create the Label Printing tab with barcode scanner and Zebra printer functionality"""
+        tab_widget = QWidget()
+        layout = QVBoxLayout(tab_widget)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+        
+        # Header section
+        header_frame = QFrame()
+        header_frame.setObjectName("labelPrintingHeader")
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        
+        # Title
+        title_label = QLabel("Label Printing")
+        title_label.setObjectName("labelPrintingTitle")
+        title_label.setStyleSheet("""
+            QLabel#labelPrintingTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+        """)
+        header_layout.addWidget(title_label)
+        
+        # Date selection button
+        self.date_button = QPushButton(f"Date: {self.selected_date}")
+        self.date_button.setObjectName("dateButton")
+        self.date_button.setStyleSheet("""
+            QPushButton#dateButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 8px 16px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton#dateButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        self.date_button.clicked.connect(self.change_date)
+        header_layout.addWidget(self.date_button)
+        
+        # Printer status
+        self.printer_status_label = QLabel("Connected to: Not Connected")
+        self.printer_status_label.setObjectName("printerStatusLabel")
+        self.printer_status_label.setStyleSheet("""
+            QLabel#printerStatusLabel {
+                color: #e74c3c;
+                font-weight: bold;
+            }
+        """)
+        header_layout.addStretch()  # Push printer status to the right
+        header_layout.addWidget(self.printer_status_label)
+        
+        header_layout.addStretch()
+        layout.addWidget(header_frame)
+        
+        # Main content area
+        content_frame = QFrame()
+        content_layout = QHBoxLayout(content_frame)
+        content_layout.setSpacing(20)
+        
+        # Left column - Scanner and Order Info
+        left_column = QFrame()
+        left_column.setObjectName("leftColumn")
+        left_column.setFixedWidth(400)
+        left_layout = QVBoxLayout(left_column)
+        left_layout.setSpacing(12)
+        
+        # Barcode Scanner Section
+        scanner_group = QGroupBox("Barcode Scanner")
+        scanner_group.setObjectName("scannerGroup")
+        scanner_layout = QVBoxLayout(scanner_group)
+        scanner_layout.setSpacing(8)
+        
+        # Order number input (for barcode scanner)
+        order_input_label = QLabel("Scan Order Number")
+        order_input_label.setObjectName("orderInputLabel")
+        order_input_label.setStyleSheet("""
+            QLabel#orderInputLabel {
+                font-weight: bold;
+                color: #27ae60;
+            }
+        """)
+        scanner_layout.addWidget(order_input_label)
+        
+        self.order_number_input = QLineEdit()
+        self.order_number_input.setObjectName("orderNumberInput")
+        self.order_number_input.setPlaceholderText("Click here to begin scanning")
+        # Connect returnPressed signal for manual entry
+        self.order_number_input.returnPressed.connect(self.on_order_number_entered)
+        scanner_layout.addWidget(self.order_number_input)
+        
+        # Order info display
+        self.order_info_label = QLabel("No order selected")
+        self.order_info_label.setObjectName("orderInfoLabel")
+        self.order_info_label.setWordWrap(True)
+        self.order_info_label.setStyleSheet("""
+            QLabel#orderInfoLabel {
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                padding: 8px;
+                min-height: 60px;
+            }
+        """)
+        scanner_layout.addWidget(self.order_info_label)
+        
+        left_layout.addWidget(scanner_group)
+        
+        # Manual Print Section
+        manual_group = QGroupBox("Manual Printing")
+        manual_group.setObjectName("manualGroup")
+        manual_layout = QVBoxLayout(manual_group)
+        manual_layout.setSpacing(8)
+        
+        # Manual print button
+        self.manual_print_button = QPushButton("Print Label Manually")
+        self.manual_print_button.setObjectName("manualPrintButton")
+        self.manual_print_button.setStyleSheet("""
+            QPushButton#manualPrintButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 12px 20px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton#manualPrintButton:hover {
+                background-color: #218838;
+            }
+            QPushButton#manualPrintButton:pressed {
+                background-color: #1e7e34;
+            }
+        """)
+        self.manual_print_button.clicked.connect(self.open_manual_print_dialog)
+        manual_layout.addWidget(self.manual_print_button)
+        
+        # Manual print info
+        manual_info_label = QLabel("Enter label information manually without scanning")
+        manual_info_label.setObjectName("manualInfoLabel")
+        manual_info_label.setStyleSheet("""
+            QLabel#manualInfoLabel {
+                color: #6c757d;
+                font-size: 12px;
+                font-style: italic;
+            }
+        """)
+        manual_info_label.setWordWrap(True)
+        manual_layout.addWidget(manual_info_label)
+        
+        left_layout.addWidget(manual_group)
+        
+        left_layout.addStretch()
+        
+        content_layout.addWidget(left_column)
+        
+        # Right column - Printer Status and Log
+        right_column = QFrame()
+        right_column.setObjectName("rightColumn")
+        right_layout = QVBoxLayout(right_column)
+        right_layout.setSpacing(12)
+        
+        
+        # Print Log Section (Collapsible)
+        log_group = QGroupBox("Print Log")
+        log_group.setObjectName("logGroup")
+        log_group.setCheckable(True)
+        log_group.setChecked(False)  # Start collapsed
+        log_group.setStyleSheet("""
+            QGroupBox#logGroup {
+                font-weight: bold;
+                border: 2px solid #e2e8f0;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox#logGroup::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+            }
+        """)
+        log_layout = QVBoxLayout(log_group)
+        log_layout.setSpacing(8)
+        
+        self.print_log = QTextEdit()
+        self.print_log.setObjectName("printLog")
+        self.print_log.setMaximumHeight(200)
+        self.print_log.setReadOnly(True)
+        self.print_log.setStyleSheet("""
+            QTextEdit#printLog {
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-size: 11px;
+                color: black;
+            }
+        """)
+        log_layout.addWidget(self.print_log)
+        
+        # View Logs Button
+        self.view_logs_button = QPushButton("View Logs")
+        self.view_logs_button.setObjectName("viewLogsButton")
+        self.view_logs_button.clicked.connect(self.show_logs_dialog)
+        log_layout.addWidget(self.view_logs_button)
+        
+        right_layout.addWidget(log_group)
+        right_layout.addStretch()
+        
+        content_layout.addWidget(right_column)
+        layout.addWidget(content_frame)
+        
+        # Initialize printer connection
+        self.zebra_printer = None
+        self.current_order_data = None
+        
+        # Auto-connect to printer
+        self.auto_connect_printer()
+        
+        # Set up barcode scanner monitoring
+        self.setup_barcode_scanner()
+        
+        return tab_widget
+    
+    def auto_connect_printer(self):
+        """Automatically connect to printer on startup"""
+        self.log_print_message("Auto-connecting to printer...")
+        self.connect_printer()
+    
+    def setup_barcode_scanner(self):
+        """Set up continuous barcode scanner monitoring"""
+        # Create a timer to check for barcode input
+        self.scanner_timer = QTimer()
+        self.scanner_timer.timeout.connect(self.check_barcode_input)
+        self.scanner_timer.start(100)  # Check every 100ms
+        
+        # Store previous input to detect new scans
+        self.previous_input = ""
+        self.processing_scan = False  # Flag to prevent duplicate processing
+        self.current_processing_order = None  # Track currently processing order
+        self.dialog_open = False  # Flag to prevent multiple dialogs
+        
+        # Barcode input stabilization
+        self.input_stable_timer = QTimer()
+        self.input_stable_timer.timeout.connect(self.process_stable_input)
+        self.input_stable_timer.setSingleShot(True)
+        self.pending_input = ""  # Store input waiting to be processed
+        
+        self.log_print_message("Barcode scanner monitoring started - scanning in background")
+    
+    def check_barcode_input(self):
+        """Check for new barcode input with stabilization"""
+        current_input = self.order_number_input.text().strip()
+        
+        # If input has changed and is not empty, start stabilization timer
+        if current_input != self.previous_input and current_input and not self.processing_scan:
+            self.pending_input = current_input
+            self.previous_input = current_input
+            # Restart the stabilization timer (300ms delay)
+            self.input_stable_timer.start(300)
+    
+    def process_stable_input(self):
+        """Process input after it has stabilized (no changes for 300ms)"""
+        if self.pending_input and not self.processing_scan:
+            self.processing_scan = True
+            self.process_barcode_scan(self.pending_input)
+    
+    def process_barcode_scan(self, order_number):
+        """Process a scanned barcode"""
+        self.log_print_message(f"Barcode scanned: {order_number}")
+        
+        # Store the order number we're processing to prevent duplicate processing
+        self.current_processing_order = order_number
+        
+        # Clear the input field after a delay to allow scanner to finish inputting
+        QTimer.singleShot(500, self.order_number_input.clear)  # 500ms delay
+        
+        # Fetch order data
+        self.fetch_order_data(order_number)
+        
+        # Reset the processing flag and clear current order after a longer delay
+        QTimer.singleShot(1000, self.reset_processing_flags)
+    
+    def reset_processing_flags(self):
+        """Reset processing flags after scan is complete"""
+        self.processing_scan = False
+        self.current_processing_order = None
+    
+    def on_order_number_entered(self):
+        """Handle order number input from barcode scanner or manual entry"""
+        order_number = self.order_number_input.text().strip()
+        if not order_number:
+            return
+        
+        # Skip if we're already processing this same order number
+        if hasattr(self, 'current_processing_order') and order_number == self.current_processing_order:
+            self.log_print_message(f"Skipping duplicate processing of order: {order_number}")
+            return
+        
+        # Skip if we're already processing a scan
+        if self.processing_scan:
+            return
+        
+        self.log_print_message(f"Scanning order number: {order_number}")
+        self.fetch_order_data(order_number)
+    
+    def fetch_order_data(self, order_number):
+        """Fetch order data from Supabase using order number"""
+        if not SUPABASE_AVAILABLE:
+            self.order_info_label.setText("Error: Supabase not available")
+            self.log_print_message("Error: Supabase not available")
+            return
+        
+        try:
+            # Get Supabase client
+            supabase_client = get_supabase_client()
+            
+            # Store original case for display
+            original_order_number = order_number
+            # Convert to uppercase for database search (database likely stores in uppercase)
+            search_order_number = order_number.upper()
+            
+            # Query for the specific order
+            result = supabase_client.table('dispatch_orders').select(
+                "ordernumber, sitename, route, customer_type, created_at, dispatchcode"
+            ).eq('ordernumber', search_order_number).execute()
+            
+            if result.data and len(result.data) > 0:
+                order_data = result.data[0]
+                # Store the original case order number for display and printing
+                order_data['ordernumber'] = original_order_number
+                self.current_order_data = order_data
+                
+                # Display order info
+                site_name = order_data.get('sitename', 'N/A')
+                route = order_data.get('route', 'N/A')
+                customer_type = order_data.get('customer_type', 'N/A')
+                created_at = order_data.get('created_at', 'N/A')
+                dispatchcode = order_data.get('dispatchcode', 'N/A')
+                
+                # Format date
+                if created_at != 'N/A':
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                        created_at = dt.strftime('%Y-%m-%d %H:%M')
+                    except:
+                        pass
+                
+                order_info = f"""Order: {original_order_number}
+Dispatch Code: {dispatchcode}
+Site: {site_name}
+Route: {route}
+Customer: {customer_type}
+Date: {created_at}"""
+                
+                self.order_info_label.setText(order_info)
+                self.log_print_message(f"Order found: {original_order_number} - {site_name}")
+                
+                # Show crate count dialog immediately after scanning
+                self.show_crate_count_dialog()
+                
+            else:
+                self.order_info_label.setText(f"Order {original_order_number} not found in database")
+                self.current_order_data = None
+                self.log_print_message(f"Order {original_order_number} not found")
+                
+        except Exception as e:
+            self.order_info_label.setText(f"Error fetching order data: {str(e)}")
+            self.current_order_data = None
+            self.log_print_message(f"Error fetching order data: {str(e)}")
+    
+    def connect_printer(self):
+        """Connect to Zebra ZT411 printer"""
+        try:
+            # Get available printers using Windows wmic command
+            result = subprocess.run(['wmic', 'printer', 'get', 'name'], 
+                                  capture_output=True, text=True, shell=True)
+            
+            if result.returncode == 0:
+                printers = [line.strip() for line in result.stdout.split('\n') 
+                           if line.strip() and line.strip() != 'Name']
+                
+                # Look for ZT411 or Zebra printer
+                zt411_printer = None
+                for printer in printers:
+                    printer_upper = printer.upper()
+                    if ('ZT411' in printer_upper or 
+                        'ZEBRA' in printer_upper or 
+                        'ZDESIGNER' in printer_upper or
+                        'ZPL' in printer_upper):
+                        zt411_printer = printer
+                        break
+                
+                if zt411_printer:
+                    self.zebra_printer = zt411_printer
+                    self.printer_status_label.setText(f"Connected to: {zt411_printer}")
+                    self.printer_status_label.setStyleSheet("""
+                        QLabel#printerStatusLabel {
+                            color: #27ae60;
+                            font-weight: bold;
+                        }
+                    """)
+                    return
+                else:
+                    self.log_print_message("No Zebra ZT411 printer found in system printers")
+            else:
+                self.log_print_message(f"Could not get printer list: {result.stderr}")
+            
+            # If no ZT411 found, try USB connection
+            self.try_usb_connection()
+                
+        except Exception as e:
+            self.log_print_message(f"Printer detection failed: {str(e)}")
+            self.try_usb_connection()
+    
+    def try_usb_connection(self):
+        """Try to connect via USB port"""
+        try:
+            # Try common USB ports for Zebra printers
+            usb_ports = ['COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8']
+            
+            for port in usb_ports:
+                try:
+                    # Test if port is available
+                    ser = serial.Serial(port, 9600, timeout=1)
+                    ser.close()
+                    
+                    # Store the port for printing
+                    self.zebra_printer = f"USB:{port}"
+                    
+                    self.printer_status_label.setText(f"Connected to: USB {port}")
+                    self.printer_status_label.setStyleSheet("""
+                        QLabel#printerStatusLabel {
+                            color: #27ae60;
+                            font-weight: bold;
+                        }
+                    """)
+                    self.log_print_message(f"Successfully connected via USB: {port}")
+                    return
+                    
+                except Exception:
+                    continue
+            
+            # If no USB connection worked
+            self.printer_status_label.setText("Connected to: Not Found")
+            self.printer_status_label.setStyleSheet("""
+                QLabel#printerStatusLabel {
+                    color: #e74c3c;
+                    font-weight: bold;
+                }
+            """)
+            self.log_print_message("No Zebra printer found on any USB port")
+            self.zebra_printer = None
+            
+        except Exception as e:
+            self.printer_status_label.setText("Connected to: Connection Failed")
+            self.printer_status_label.setStyleSheet("""
+                QLabel#printerStatusLabel {
+                    color: #e74c3c;
+                    font-weight: bold;
+                }
+            """)
+            self.log_print_message(f"USB connection failed: {str(e)}")
+            self.zebra_printer = None
+    
+    def show_crate_count_dialog(self):
+        """Show crate count dialog after scanning order number"""
+        if not self.current_order_data:
+            QMessageBox.warning(self, "Order Error", "No order data available.")
+            return
+        
+        # Check if dialog is already open
+        if self.dialog_open:
+            self.log_print_message("Dialog already open, skipping duplicate")
+            return
+        
+        # Set dialog flag
+        self.dialog_open = True
+        
+        # Create and show the crate count dialog
+        dialog = CrateCountDialog(self)
+        dialog.setWindowTitle(f"Print Labels for Order {self.current_order_data.get('ordernumber', 'N/A')}")
+        
+        # Center the dialog on screen
+        dialog.move(self.x() + (self.width() - dialog.width()) // 2, 
+                   self.y() + (self.height() - dialog.height()) // 2)
+        
+        if dialog.exec() == QDialog.Accepted:
+            crate_count = dialog.get_crate_count()
+            self.log_print_message(f"Printing {crate_count} labels for order {self.current_order_data.get('ordernumber', 'N/A')}")
+            self.print_labels_with_count(crate_count)
+            
+            # Move cursor back to order number input ONLY after successful printing
+            self.order_number_input.setFocus()
+            self.order_number_input.clear()
+            self.log_print_message("Ready for next scan - cursor positioned in order number field")
+        else:
+            self.log_print_message("Print cancelled by user")
+            # Do NOT move cursor back if cancelled - user can manually click if needed
+        
+        # Reset dialog flag
+        self.dialog_open = False
+    
+    def change_date(self):
+        """Open date selection dialog"""
+        dialog = DateSelectionDialog(self.selected_date, self)
+        dialog.setWindowTitle("Select Date for Labels")
+        
+        # Center the dialog on screen
+        dialog.move(self.x() + (self.width() - dialog.width()) // 2, 
+                   self.y() + (self.height() - dialog.height()) // 2)
+        
+        if dialog.exec() == QDialog.Accepted:
+            self.selected_date = dialog.get_selected_date()
+            self.date_button.setText(f"Date: {self.selected_date}")
+            self.log_print_message(f"Date changed to: {self.selected_date}")
+    
+    def open_manual_print_dialog(self):
+        """Open manual label printing dialog"""
+        if not self.zebra_printer:
+            QMessageBox.warning(self, "Printer Error", "Please connect to printer first.")
+            return
+        
+        dialog = ManualLabelDialog(self)
+        dialog.setWindowTitle("Manual Label Printing")
+        
+        # Center the dialog on screen
+        dialog.move(self.x() + (self.width() - dialog.width()) // 2, 
+                   self.y() + (self.height() - dialog.height()) // 2)
+        
+        if dialog.exec() == QDialog.Accepted:
+            label_data = dialog.get_label_data()
+            
+            # Validate required fields
+            if not label_data['order_number']:
+                QMessageBox.warning(self, "Validation Error", "Order number is required.")
+                return
+            
+            if not label_data['site_name']:
+                QMessageBox.warning(self, "Validation Error", "Site name is required.")
+                return
+            
+            if not label_data['route']:
+                QMessageBox.warning(self, "Validation Error", "Route is required.")
+                return
+            
+            if not label_data['dispatch_code']:
+                QMessageBox.warning(self, "Validation Error", "Dispatch code is required.")
+                return
+            
+            # Print labels with manual data
+            self.print_manual_labels_with_count(label_data)
+    
+    def print_manual_labels_with_count(self, label_data):
+        """Print labels with manually entered data"""
+        try:
+            order_number = label_data['order_number']
+            site_name = label_data['site_name']
+            route = label_data['route']
+            dispatch_code = label_data['dispatch_code']
+            crate_count = label_data['crate_count']
+            
+            # Check if more than 15 labels are being printed
+            if crate_count > 15:
+                reply = QMessageBox.question(
+                    self, 
+                    "Confirm Label Count", 
+                    f"You are trying to print {crate_count} labels. Is 15 labels the correct required amount?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    crate_count = 15  # Limit to 15 labels
+                    self.log_print_message(f"Label count limited to 15 as confirmed by user")
+                else:
+                    self.log_print_message(f"Print cancelled by user - {crate_count} labels requested")
+                    return
+            
+            self.log_print_message(f"Printing {crate_count} manual labels for order {order_number}")
+            
+            # Print each label
+            for i in range(1, crate_count + 1):
+                zpl_code = self.generate_label_zpl(order_number, site_name, route, i, crate_count, dispatch_code)
+                self.send_to_printer(zpl_code)
+                self.log_print_message(f"Printed label {i}/{crate_count}")
+            
+            self.log_print_message(f"Successfully printed {crate_count} manual labels for order {order_number}")
+            
+        except Exception as e:
+            error_msg = f"Manual print error: {str(e)}"
+            self.log_print_message(error_msg)
+            QMessageBox.critical(self, "Print Error", error_msg)
+    
+    def print_labels_with_count(self, crate_count):
+        """Print labels with specified crate count"""
+        if not self.zebra_printer:
+            QMessageBox.warning(self, "Printer Error", "Please connect to printer first.")
+            return
+        
+        if not self.current_order_data:
+            self.log_print_message("Error: No order data available")
+            QMessageBox.warning(self, "Order Error", "Please scan an order number first.")
+            return
+        
+        # Check if more than 15 labels are being printed
+        if crate_count > 15:
+            reply = QMessageBox.question(
+                self, 
+                "Confirm Label Count", 
+                f"You are trying to print {crate_count} labels. Is 15 labels the correct required amount?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                crate_count = 15  # Limit to 15 labels
+                self.log_print_message(f"Label count limited to 15 as confirmed by user")
+            else:
+                self.log_print_message(f"Print cancelled by user - {crate_count} labels requested")
+            return
+        
+        try:
+            order_number = self.current_order_data.get('ordernumber', 'N/A')
+            site_name = self.current_order_data.get('sitename', 'N/A')
+            route = self.current_order_data.get('route', 'N/A')
+            dispatchcode = self.current_order_data.get('dispatchcode', 'N/A')
+            
+            if not order_number or order_number == 'N/A':
+                raise Exception("Order number is missing or invalid")
+            
+            self.log_print_message(f"Printing {crate_count} labels for order {order_number}")
+            
+            # Print each label
+            for i in range(1, crate_count + 1):
+                zpl_code = self.generate_label_zpl(order_number, site_name, route, i, crate_count, dispatchcode)
+                self.send_to_printer(zpl_code)
+                self.log_print_message(f"Printed label {i}/{crate_count}")
+            
+            self.log_print_message(f"Successfully printed {crate_count} labels for order {order_number}")
+            
+        except Exception as e:
+            error_msg = f"Print error: {str(e)}"
+            self.log_print_message(error_msg)
+            QMessageBox.critical(self, "Print Error", error_msg)
+    
+    def print_labels(self):
+        """Print labels for the current order using spinbox value"""
+        if not self.current_order_data:
+            self.log_print_message("Error: No order data available")
+            QMessageBox.warning(self, "Order Error", "Please scan an order number first.")
+            return
+        
+        crate_count = 1  # Default to 1 crate since UI element was removed
+        self.print_labels_with_count(crate_count)
+    
+    def send_to_printer(self, zpl_code):
+        """Send ZPL code to the printer"""
+        try:
+            if self.zebra_printer.startswith("USB:"):
+                # USB connection - send via serial port
+                port = self.zebra_printer.replace("USB:", "")
+                with serial.Serial(port, 9600, timeout=5) as ser:
+                    ser.write(zpl_code.encode('utf-8'))
+                    time.sleep(0.5)  # Give printer time to process
+            else:
+                # Windows printer - try multiple methods
+                try:
+                    # Method 1: Try Windows API (most reliable)
+                    self.send_via_windows_api(zpl_code)
+                except Exception as api_error:
+                    self.log_print_message(f"Windows API method failed: {str(api_error)}")
+                    
+                    # Method 2: Try PowerShell
+                    try:
+                        self.send_via_powershell(zpl_code)
+                    except Exception as ps_error:
+                        self.log_print_message(f"PowerShell method failed: {str(ps_error)}")
+                        
+                        # Method 3: Try file-based approach
+                        self.send_via_file(zpl_code)
+                        
+        except Exception as e:
+            raise Exception(f"Failed to send to printer: {str(e)}")
+    
+    def send_via_windows_api(self, zpl_code):
+        """Send ZPL using Windows API"""
+        try:
+            # Open printer
+            hprinter = win32print.OpenPrinter(self.zebra_printer)
+            
+            try:
+                # Start document
+                job_info = win32print.StartDocPrinter(hprinter, 1, ("ZPL Label", None, "RAW"))
+                
+                try:
+                    # Start page
+                    win32print.StartPagePrinter(hprinter)
+                    
+                    # Write ZPL data
+                    win32print.WritePrinter(hprinter, zpl_code.encode('utf-8'))
+                    
+                    # End page and document
+                    win32print.EndPagePrinter(hprinter)
+                    win32print.EndDocPrinter(hprinter)
+                    
+                except Exception as e:
+                    win32print.AbortPrinter(hprinter)
+                    raise e
+                    
+            finally:
+                win32print.ClosePrinter(hprinter)
+                
+        except Exception as e:
+            raise Exception(f"Windows API failed: {str(e)}")
+    
+    def send_via_powershell(self, zpl_code):
+        """Send ZPL using PowerShell"""
+        try:
+            # Escape the ZPL code for PowerShell
+            escaped_zpl = zpl_code.replace('"', '`"').replace('$', '`$')
+            ps_command = f'''
+            $printer = "{self.zebra_printer}"
+            $zpl = @"
+{escaped_zpl}
+"@
+            $zpl | Out-Printer -Name $printer
+            '''
+            
+            result = subprocess.run([
+                'powershell', '-Command', ps_command
+            ], capture_output=True, text=True, shell=True)
+            
+            if result.returncode != 0:
+                raise Exception(f"PowerShell failed: {result.stderr}")
+                
+        except Exception as e:
+            raise Exception(f"PowerShell method failed: {str(e)}")
+    
+    def send_via_file(self, zpl_code):
+        """Send ZPL using temporary file"""
+        try:
+            # Create temporary file with ZPL code
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.zpl', delete=False) as temp_file:
+                temp_file.write(zpl_code)
+                temp_file_path = temp_file.name
+            
+            try:
+                # Try using Windows copy command to printer port
+                result = subprocess.run([
+                    'copy', '/B', temp_file_path, f'\\\\{self.zebra_printer}'
+                ], capture_output=True, text=True, shell=True)
+                
+                if result.returncode != 0:
+                    # Try alternative method with print command
+                    result = subprocess.run([
+                        'print', '/D:', self.zebra_printer, temp_file_path
+                    ], capture_output=True, text=True, shell=True)
+                    
+                    if result.returncode != 0:
+                        raise Exception(f"File-based print failed: {result.stderr}")
+                
+            finally:
+                # Clean up temporary file
+                try:
+                    os.unlink(temp_file_path)
+                except:
+                    pass
+                    
+        except Exception as e:
+            raise Exception(f"File method failed: {str(e)}")
+    
+    def generate_label_zpl(self, order_number, site_name, route, crate_number, total_crates, dispatchcode):
+        """Generate ZPL code for the label (6.5cm x 13.5cm)"""
+        # Convert cm to dots (203 DPI = 80 dots per cm)
+        width_dots = int(6.5 * 80)  # 520 dots
+        height_dots = int(13.5 * 80)  # 1080 dots
+        
+        # Use selected date instead of current date
+        current_date = self.selected_date
+        
+        # Ensure all variables have default values if None
+        order_number = order_number or "N/A"
+        site_name = site_name or "N/A"
+        route = route or "N/A"
+        dispatchcode = dispatchcode or "N/A"
+        barcode_data = order_number
+        
+        # Handle long site names - split into maximum 2 lines with optimized breaking
+        site_name_lines = []
+        # Use longer line length to reduce number of lines while ensuring fit
+        max_chars_per_line = 25
+        
+        if len(site_name) > max_chars_per_line:
+            words = site_name.split()
+            current_line = ""
+            for word in words:
+                if len(current_line + " " + word) <= max_chars_per_line:
+                    current_line += (" " + word) if current_line else word
+                else:
+                    if current_line:
+                        site_name_lines.append(current_line)
+                    current_line = word
+                    # Limit to maximum 2 lines
+                    if len(site_name_lines) >= 2:
+                        # If we already have 2 lines, truncate the remaining text
+                        remaining_text = " ".join([current_line] + words[words.index(word):])
+                        if len(remaining_text) > 15:
+                            remaining_text = remaining_text[:12] + "..."
+                        site_name_lines.append(remaining_text)
+                        break
+            if current_line and len(site_name_lines) < 2:
+                site_name_lines.append(current_line)
+        else:
+            site_name_lines = [site_name]
+        
+        # Site name font sizing - adjust based on number of lines and total length (increased sizes)
+        num_lines = len(site_name_lines)
+        total_length = len(site_name)
+        
+        if num_lines == 1:
+            if total_length <= 15:
+                site_font_size = 60
+            elif total_length <= 20:
+                site_font_size = 55
+            else:
+                site_font_size = 50
+        elif num_lines == 2:
+            if total_length <= 30:
+                site_font_size = 50
+            else:
+                site_font_size = 45
+        else:  # 3+ lines (shouldn't happen with our 2-line limit)
+            site_font_size = 40
+        
+        # Handle long route names - split into maximum 2 lines with optimized breaking
+        route_lines = []
+        # Use 15 character limit to wrap sooner
+        max_route_chars_per_line = 15
+        
+        if len(route) > max_route_chars_per_line:
+            words = route.split()
+            current_line = ""
+            for word in words:
+                if len(current_line + " " + word) <= max_route_chars_per_line:
+                    current_line += (" " + word) if current_line else word
+                else:
+                    if current_line:
+                        route_lines.append(current_line)
+                    current_line = word
+                    # Limit to maximum 2 lines
+                    if len(route_lines) >= 2:
+                        # If we already have 2 lines, truncate the remaining text
+                        remaining_text = " ".join([current_line] + words[words.index(word):])
+                        if len(remaining_text) > 15:
+                            remaining_text = remaining_text[:12] + "..."
+                        route_lines.append(remaining_text)
+                        break
+            if current_line and len(route_lines) < 2:
+                route_lines.append(current_line)
+        else:
+            route_lines = [route]
+        
+        # Dynamic barcode sizing based on order number length - bigger for shorter numbers
+        barcode_height = 60 if len(order_number) <= 10 else 50 if len(order_number) <= 15 else 40
+        barcode_width = 3 if len(order_number) <= 10 else 2 if len(order_number) <= 15 else 1
+        
+        # Dynamic text sizing based on content length
+        crate_text = f"{crate_number} of {total_crates}"
+        
+        # Crate text sizing - adjust based on length (shorter text now)
+        if len(crate_text) <= 8:
+            crate_font_size = 65
+        elif len(crate_text) <= 12:
+            crate_font_size = 55
+        else:
+            crate_font_size = 45
+            
+        # Route text sizing - adjust based on number of lines and total length
+        num_route_lines = len(route_lines)
+        total_route_length = len(route)
+        
+        if num_route_lines == 1:
+            if total_route_length <= 6:
+                route_font_size = 80
+            elif total_route_length <= 10:
+                route_font_size = 70
+            elif total_route_length <= 15:
+                route_font_size = 60
+            elif total_route_length <= 20:
+                route_font_size = 50
+            else:
+                route_font_size = 40
+        else:  # 2 lines
+            if total_route_length <= 20:
+                route_font_size = 50
+            elif total_route_length <= 30:
+                route_font_size = 45
+            else:
+                route_font_size = 40
+            
+        # Date font sizing - adjust based on length
+        if len(current_date) <= 10:
+            date_font_size = 30
+        else:
+            date_font_size = 25
+        
+        # Start position with 25% empty space at top (270 dots = 25% of 1080)
+        start_y = 270  # 25% of 1080 dots - moved content even lower
+        
+        # Build ZPL code with proper positioning and center alignment
+        zpl = f"""^XA
+^PW{width_dots}
+^LL{height_dots}
+^FO{width_dots//2 - len(dispatchcode)*12},{start_y}^A0N,50,50^FD{dispatchcode}^FS
+^FO30,{start_y + 80}^GB480,2,2^FS"""
+        
+        # Add site name lines (left aligned) with increased spacing
+        y_pos = start_y + 100
+        for line in site_name_lines:
+            zpl += f"\n^FO30,{y_pos}^A0N,{site_font_size},{site_font_size}^FD{line}^FS"
+            y_pos += site_font_size + 25  # Increased from 15 to 25
+        
+        # Add date (center aligned) with increased spacing
+        y_pos += 30  # Increased from 20 to 30
+        zpl += f"""
+^FO30,{y_pos}^GB480,2,2^FS
+^FO{width_dots//2 - len(current_date)*10},{y_pos + 25}^A0N,{date_font_size},{date_font_size}^FD{current_date}^FS
+^FO30,{y_pos + 80}^GB480,2,2^FS
+^FO{width_dots//2 - len(crate_text)*12},{y_pos + 105}^A0N,{crate_font_size},{crate_font_size}^FD^CI28^FD{crate_text}^FS
+^FO30,{y_pos + 170}^GB480,2,2^FS
+^FO{max(20, width_dots//2 - (len(barcode_data) * barcode_width * 7))},{y_pos + 190}^BY{barcode_width}
+^BCN,{barcode_height},Y,N,N
+^FD{barcode_data}^FS
+^FO30,{y_pos + 190 + barcode_height + 50}^GB480,2,2^FS
+^FO{width_dots//2 - len('Route')*8},{y_pos + 190 + barcode_height + 70}^A0N,35,35^FDRoute^FS"""
+        
+        # Add route lines (center aligned) with increased spacing
+        route_y_pos = y_pos + 190 + barcode_height + 110
+        for line in route_lines:
+            zpl += f"\n^FO{max(30, width_dots//2 - len(line)*18)},{route_y_pos}^A0N,{route_font_size},{route_font_size}^FD{line}^FS"
+            route_y_pos += route_font_size + 15  # Space between lines
+        
+        zpl += "\n^XZ"""
+        
+        return zpl
+    
+    def preview_label(self):
+        """Show a preview of the label"""
+        if not self.current_order_data:
+            QMessageBox.warning(self, "Preview Error", "Please scan an order number first.")
+            return
+        
+        try:
+            crate_count = 1  # Default to 1 crate since UI element was removed
+            order_number = self.current_order_data.get('ordernumber', 'N/A')
+            site_name = self.current_order_data.get('sitename', 'N/A')
+            route = self.current_order_data.get('route', 'N/A')
+            dispatchcode = self.current_order_data.get('dispatchcode', 'N/A')
+            
+            # Validate that we have the essential data
+            if not order_number or order_number == 'N/A':
+                raise Exception("Order number is missing or invalid")
+            
+            # Generate ZPL code for preview
+            zpl_code = self.generate_label_zpl(order_number, site_name, route, 1, crate_count, dispatchcode)
+            
+            # Show preview dialog
+            preview_dialog = LabelPreviewDialog(zpl_code, order_number, dispatchcode, site_name, route, 1, crate_count, self)
+            preview_dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Preview Error", f"Failed to generate preview: {str(e)}")
+    
+    def log_print_message(self, message):
+        """Add message to print log"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_message = f"[{timestamp}] {message}"
+        self.print_log.append(log_message)
+        # Auto-scroll to bottom
+        self.print_log.verticalScrollBar().setValue(self.print_log.verticalScrollBar().maximum())
+    
+    def show_logs_dialog(self):
+        """Show logs in a separate dialog window"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Print Logs")
+        dialog.setModal(True)
+        dialog.resize(800, 600)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Log text area
+        log_text = QTextEdit()
+        log_text.setReadOnly(True)
+        log_text.setPlainText(self.print_log.toPlainText())
+        log_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-size: 11px;
+            }
+        """)
+        layout.addWidget(log_text)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        clear_button = QPushButton("Clear Logs")
+        clear_button.clicked.connect(lambda: self.clear_logs(dialog))
+        button_layout.addWidget(clear_button)
+        
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        button_layout.addWidget(close_button)
+        
+        layout.addLayout(button_layout)
+        dialog.exec()
+    
+    def clear_logs(self, dialog):
+        """Clear all logs"""
+        self.print_log.clear()
+        dialog.accept()
+    
+    
     def create_unified_file_selection_column(self):
         """Create unified left column with file selection controls"""
         column = QFrame()
@@ -2030,11 +3854,6 @@ class DispatchScanningApp(QMainWindow):
         self.unified_progress_bar.setVisible(False)
         layout.addWidget(self.unified_progress_bar)
         
-        # Status label
-        self.unified_status_label = QLabel("Ready to process picking sheets")
-        self.unified_status_label.setObjectName("successText")
-        layout.addWidget(self.unified_status_label)
-        
         return section
     
     def create_unified_processing_column(self):
@@ -2052,10 +3871,6 @@ class DispatchScanningApp(QMainWindow):
         # Excel column requirements section
         requirements_section = self.create_requirements_section()
         layout.addWidget(requirements_section)
-        
-        # Process button section
-        process_section = self.create_process_button_section()
-        layout.addWidget(process_section)
         
         layout.addStretch()
         return column
@@ -2621,17 +4436,8 @@ class DispatchScanningApp(QMainWindow):
         
         if has_output_folder and has_picking_sheets:
             self.unified_process_btn.setEnabled(True)
-            self.unified_status_label.setText("Ready to process picking sheets")
-            self.unified_status_label.setObjectName("successText")
         else:
             self.unified_process_btn.setEnabled(False)
-            if not has_output_folder and not has_picking_sheets:
-                self.unified_status_label.setText("Please select output folder and picking sheet files")
-            elif not has_output_folder:
-                self.unified_status_label.setText("Please select output folder")
-            else:
-                self.unified_status_label.setText("Please select picking sheet files")
-            self.unified_status_label.setObjectName("infoText")
     
     def process_unified_flow(self):
         """Process the unified flow: extract data from picking sheets, create internal Excel data, and process with barcodes"""
@@ -2646,14 +4452,10 @@ class DispatchScanningApp(QMainWindow):
         try:
             # Check if OCR setup is completed
             if not self.check_ocr_setup():
-                self.unified_status_label.setText("OCR setup cancelled or failed")
-                self.unified_status_label.setObjectName("warningText")
                 self.unified_process_btn.setEnabled(True)
                 return
             
             # Update status and show progress bar
-            self.unified_status_label.setText("Processing picking sheets...")
-            self.unified_status_label.setObjectName("infoText")
             self.unified_process_btn.setEnabled(False)
             self.unified_progress_bar.setVisible(True)
             self.unified_progress_bar.setValue(0)
@@ -2732,7 +4534,6 @@ class DispatchScanningApp(QMainWindow):
                             if total_work > 0:
                                 progress = int((current_work / total_work) * 50)  # First half for data extraction
                                 self.unified_progress_bar.setValue(progress)
-                                self.unified_status_label.setText(f"Extracting data: {Path(pdf_path).name} - Page {page_num + 1} - Region {region['name']} ({progress}%)")
                             
                             self.update_status(f"Page {page_num + 1}, {region['name']}: '{cleaned_text}'")
                     
@@ -2748,18 +4549,24 @@ class DispatchScanningApp(QMainWindow):
                     self.update_status(f"Error processing {Path(pdf_path).name}: {str(e)}")
             
             # Step 2: Create internal Excel data structure (instead of generating Excel file)
-            self.unified_status_label.setText("Creating internal data structure...")
             self.unified_progress_bar.setValue(60)
             
             self.internal_excel_data = self.create_internal_excel_data(debug_results)
             
             if not self.internal_excel_data:
                 QMessageBox.warning(self, "No Data", "No valid data found in the picking sheets. Please check the PDF files and try again.")
-                self.unified_status_label.setText("No data found")
-                self.unified_status_label.setObjectName("warningText")
                 self.unified_process_btn.setEnabled(True)
                 self.unified_progress_bar.setVisible(False)
                 return
+            
+            # Step 2.5: Generate Excel backup file
+            self.unified_progress_bar.setValue(70)
+            
+            try:
+                self.generate_excel_backup_file(self.internal_excel_data)
+                self.update_status("✅ Excel backup file generated successfully")
+            except Exception as e:
+                self.update_status(f"⚠️ Warning: Could not generate Excel backup: {str(e)}")
             
             # DEBUG: Show the generated table data
             self.show_debug_table(self.internal_excel_data)
@@ -2768,7 +4575,6 @@ class DispatchScanningApp(QMainWindow):
             self.print_debug_data(self.internal_excel_data)
             
             # Step 3: Set up for barcode generation and database upload
-            self.unified_status_label.setText("Preparing for barcode generation...")
             self.unified_progress_bar.setValue(70)
             
             # Set the internal data as the Excel data for the existing processing flow
@@ -2778,7 +4584,6 @@ class DispatchScanningApp(QMainWindow):
             self.selected_picking_pdf_files = self.picking_sheet_files
             
             # Step 4: Continue with the existing barcode generation and database upload process
-            self.unified_status_label.setText("Generating barcodes and uploading to database...")
             self.unified_progress_bar.setValue(80)
             
             # Start the existing processing flow
@@ -2793,8 +4598,6 @@ class DispatchScanningApp(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Unified Processing Error", f"An error occurred during unified processing:\n{str(e)}")
-            self.unified_status_label.setText("Unified processing failed")
-            self.unified_status_label.setObjectName("errorText")
             self.unified_process_btn.setEnabled(True)
             self.unified_progress_bar.setVisible(False)
             self.update_status(f"Unified processing failed: {str(e)}")
@@ -2899,8 +4702,6 @@ class DispatchScanningApp(QMainWindow):
         self.unified_progress_bar.setVisible(False)
         
         if success:
-            self.unified_status_label.setText("Unified processing completed successfully")
-            self.unified_status_label.setObjectName("successText")
             self.update_status("Unified processing completed successfully")
             
             # Mark as processed
@@ -2912,8 +4713,6 @@ class DispatchScanningApp(QMainWindow):
             results_dialog.exec()
         else:
             error_msg = result.get("error", "Unknown error occurred")
-            self.unified_status_label.setText("Unified processing failed")
-            self.unified_status_label.setObjectName("errorText")
             self.update_status(f"Unified processing failed: {error_msg}")
             
             # Show professional error dialog with any partial results
@@ -3629,6 +5428,88 @@ class DispatchScanningApp(QMainWindow):
                 f"Failed to generate Excel file:\n\n{str(e)}"
             )
             self.update_status(f"Excel generation failed: {str(e)}")
+    
+    def generate_excel_backup_file(self, excel_data):
+        """Generate Excel backup file from processed table data"""
+        if not excel_data:
+            self.update_status("No data to generate Excel backup")
+            return
+        
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment
+            from datetime import datetime
+            import os
+            
+            # Create a new workbook
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Processed Data Backup"
+            
+            # Set up headers in the correct columns
+            headers = [
+                "Order Number", "Item Code", "Product Description", "Barcode", 
+                "Customer Type", "Quantity", "Site Name", "Account Code", 
+                "Dispatch Code", "Route"
+            ]
+            
+            # Add headers with styling
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+                cell.alignment = Alignment(horizontal="center")
+            
+            # Add data rows
+            for row_idx, data in enumerate(excel_data, 2):
+                ws.cell(row=row_idx, column=1, value=data.get('ordernumber', ''))
+                ws.cell(row=row_idx, column=2, value=data.get('itemcode', ''))
+                ws.cell(row=row_idx, column=3, value=data.get('product_description', ''))
+                ws.cell(row=row_idx, column=4, value=data.get('barcode', ''))
+                ws.cell(row=row_idx, column=5, value=data.get('customer_type', ''))
+                ws.cell(row=row_idx, column=6, value=data.get('quantity', ''))
+                ws.cell(row=row_idx, column=7, value=data.get('sitename', ''))
+                ws.cell(row=row_idx, column=8, value=data.get('accountcode', ''))
+                ws.cell(row=row_idx, column=9, value=data.get('dispatchcode', ''))
+                ws.cell(row=row_idx, column=10, value=data.get('route', ''))
+            
+            # Auto-adjust column widths
+            for column in ws.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                ws.column_dimensions[column_letter].width = adjusted_width
+            
+            # Determine output directory
+            if hasattr(self, 'selected_output_folder') and self.selected_output_folder:
+                base_output_dir = Path(self.selected_output_folder)
+            else:
+                base_output_dir = Path.cwd() / "picking_dockets_output"
+            
+            # Create date-based subfolder
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            output_dir = base_output_dir / current_date
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            excel_filename = f"Processed_Data_Backup_{timestamp}.xlsx"
+            excel_path = output_dir / excel_filename
+            
+            # Save the workbook
+            wb.save(excel_path)
+            
+            self.update_status(f"✅ Excel backup saved: {excel_path}")
+            
+        except Exception as e:
+            self.update_status(f"❌ Error generating Excel backup: {str(e)}")
+            raise e
     
     def add_more_orders(self):
         """Create in-app table for user to add more orders"""
@@ -5137,6 +7018,198 @@ class DispatchScanningApp(QMainWindow):
             QTableWidget#orderTable QHeaderView::section:last {
                 border-top-right-radius: 6px;
                 border-right: none;
+            }
+            
+            /* Label Printing Tab Styling */
+            QFrame#labelPrintingHeader {
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                margin-bottom: 12px;
+            }
+            
+            QLabel#labelPrintingTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+            
+            QLabel#printerStatusLabel {
+                color: #e74c3c;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            
+            QGroupBox#scannerGroup, QGroupBox#settingsGroup, QGroupBox#printerGroup, QGroupBox#logGroup {
+                background-color: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                margin-top: 8px;
+                padding-top: 8px;
+                font-weight: 600;
+                color: #2c3e50;
+            }
+            
+            QGroupBox#scannerGroup::title, QGroupBox#settingsGroup::title, 
+            QGroupBox#printerGroup::title, QGroupBox#logGroup::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 8px 0 8px;
+                background-color: white;
+            }
+            
+            QLineEdit#orderNumberInput {
+                background-color: white;
+                border: 2px solid #e2e8f0;
+                border-radius: 4px;
+                padding: 8px 12px;
+                font-size: 14px;
+                font-family: 'Consolas', monospace;
+            }
+            
+            QLineEdit#orderNumberInput:focus {
+                border-color: #3498db;
+                background-color: #f8f9fa;
+            }
+            
+            QLabel#orderInfoLabel {
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                padding: 8px;
+                min-height: 60px;
+                font-family: 'Consolas', monospace;
+                font-size: 11px;
+            }
+            
+            QComboBox#crateCountSpinbox {
+                background-color: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-size: 14px;
+                min-width: 80px;
+            }
+            
+            QComboBox#crateCountSpinbox:focus {
+                border-color: #3498db;
+            }
+            
+            QPushButton#printButton {
+                background-color: #27ae60;
+                color: white;
+                border: 1px solid #229954;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-weight: 600;
+                font-size: 14px;
+            }
+            
+            QPushButton#printButton:hover {
+                background-color: #229954;
+            }
+            
+            QPushButton#printButton:pressed {
+                background-color: #1e8449;
+            }
+            
+            QPushButton#printButton:disabled {
+                background-color: #bdc3c7;
+                border-color: #95a5a6;
+                color: #7f8c8d;
+            }
+            
+            QPushButton#previewButton {
+                background-color: #f39c12;
+                color: white;
+                border: 1px solid #e67e22;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-weight: 600;
+                font-size: 14px;
+            }
+            
+            QPushButton#previewButton:hover {
+                background-color: #e67e22;
+            }
+            
+            QPushButton#previewButton:pressed {
+                background-color: #d35400;
+            }
+            
+            QPushButton#previewButton:disabled {
+                background-color: #bdc3c7;
+                border-color: #95a5a6;
+                color: #7f8c8d;
+            }
+            
+            QPushButton#connectPrinterButton {
+                background-color: #3498db;
+                color: white;
+                border: 1px solid #2980b9;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: 500;
+                font-size: 12px;
+            }
+            
+            QPushButton#connectPrinterButton:hover {
+                background-color: #2980b9;
+            }
+            
+            QPushButton#connectPrinterButton:pressed {
+                background-color: #21618c;
+            }
+            
+            QLabel#printerInfoLabel {
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                padding: 8px;
+                min-height: 40px;
+                font-family: 'Consolas', monospace;
+                font-size: 11px;
+            }
+            
+            QTextEdit#printLog {
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-size: 11px;
+            }
+            
+            /* Crate Count Dialog Styling */
+            QPushButton#cancelButton {
+                background-color: #95a5a6;
+                color: white;
+                border: 1px solid #7f8c8d;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: 500;
+                font-size: 12px;
+            }
+            
+            QPushButton#cancelButton:hover {
+                background-color: #7f8c8d;
+            }
+            
+            QPushButton#printDialogButton {
+                background-color: #27ae60;
+                color: white;
+                border: 1px solid #229954;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            
+            QPushButton#printDialogButton:hover {
+                background-color: #229954;
+            }
+            
+            QPushButton#printDialogButton:pressed {
+                background-color: #1e8449;
             }
         """)
 
