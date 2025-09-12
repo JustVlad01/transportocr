@@ -56,7 +56,7 @@ from PySide6.QtGui import QFont, QPalette, QColor, QIcon, QPixmap, QPen, QBrush,
 
 # Import Supabase configuration
 try:
-    from supabase_config import save_generated_barcodes, upload_store_orders_from_excel
+    from supabase_config import save_generated_barcodes, upload_store_orders_from_excel, get_supabase_client
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
@@ -1724,7 +1724,23 @@ class DispatchScanningApp(QMainWindow):
         return header_frame
     
     def create_main_processing_content(self):
-        """Create the main processing content with unified interface"""
+        """Create the main processing content with tabbed interface"""
+        # Create tab widget
+        tab_widget = QTabWidget()
+        tab_widget.setObjectName("mainTabWidget")
+        
+        # Tab 1: Main Processing (existing functionality)
+        main_processing_tab = self.create_main_processing_tab()
+        tab_widget.addTab(main_processing_tab, "Main Processing")
+        
+        # Tab 2: Order Management (new functionality)
+        order_management_tab = self.create_order_management_tab()
+        tab_widget.addTab(order_management_tab, "Order Management")
+        
+        return tab_widget
+    
+    def create_main_processing_tab(self):
+        """Create the main processing tab with existing functionality"""
         # Content widget - no scroll area
         content_widget = QWidget()
         content_layout = QHBoxLayout(content_widget)
@@ -1744,6 +1760,196 @@ class DispatchScanningApp(QMainWindow):
         content_layout.setStretch(1, 5)
         
         return content_widget
+    
+    def create_order_management_tab(self):
+        """Create the Order Management tab with dispatch_orders table view"""
+        tab_widget = QWidget()
+        layout = QVBoxLayout(tab_widget)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+        
+        # Header section
+        header_frame = QFrame()
+        header_frame.setObjectName("orderManagementHeader")
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        
+        # Title
+        title_label = QLabel("Order Management")
+        title_label.setObjectName("orderManagementTitle")
+        title_label.setStyleSheet("""
+            QLabel#orderManagementTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+        """)
+        header_layout.addWidget(title_label)
+        
+        # Refresh button
+        refresh_button = QPushButton("Refresh Data")
+        refresh_button.setObjectName("refreshButton")
+        refresh_button.clicked.connect(self.refresh_order_data)
+        header_layout.addWidget(refresh_button)
+        
+        # Status label
+        self.order_status_label = QLabel("Ready")
+        self.order_status_label.setObjectName("orderStatusLabel")
+        header_layout.addWidget(self.order_status_label)
+        
+        header_layout.addStretch()
+        layout.addWidget(header_frame)
+        
+        # Table section
+        table_frame = QFrame()
+        table_frame.setObjectName("orderTableFrame")
+        table_layout = QVBoxLayout(table_frame)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Create table widget
+        self.order_table = QTableWidget()
+        self.order_table.setObjectName("orderTable")
+        self.order_table.setAlternatingRowColors(True)
+        self.order_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.order_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.order_table.setSortingEnabled(True)
+        
+        # Set table properties
+        self.order_table.horizontalHeader().setStretchLastSection(True)
+        self.order_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.order_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)  # Order Number
+        self.order_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)  # Customer Type
+        self.order_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)  # Picking Date
+        self.order_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)  # Site Name (stretches)
+        self.order_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)  # Dispatch Code
+        self.order_table.verticalHeader().setVisible(False)
+        
+        table_layout.addWidget(self.order_table)
+        layout.addWidget(table_frame)
+        
+        # Load initial data
+        self.load_order_data()
+        
+        return tab_widget
+    
+    def load_order_data(self):
+        """Load order data from Supabase dispatch_orders table"""
+        if not SUPABASE_AVAILABLE:
+            self.order_status_label.setText("Supabase not available")
+            return
+        
+        try:
+            self.order_status_label.setText("Loading data...")
+            QApplication.processEvents()  # Update UI
+            
+            # Get Supabase client
+            supabase_client = get_supabase_client()
+            
+            # Fetch all data from dispatch_orders table
+            result = supabase_client.table('dispatch_orders').select("*").order('created_at', desc=True).execute()
+            
+            if result.data:
+                self.populate_order_table(result.data)
+                self.order_status_label.setText(f"Loaded {len(result.data)} orders")
+            else:
+                self.order_status_label.setText("No orders found")
+                self.order_table.setRowCount(0)
+                self.order_table.setColumnCount(0)
+                
+        except Exception as e:
+            self.order_status_label.setText(f"Error loading data: {str(e)}")
+            print(f"Error loading order data: {e}")
+    
+    def populate_order_table(self, data):
+        """Populate the order table with data from Supabase"""
+        if not data:
+            return
+        
+        # Define column mapping - only show requested columns
+        columns = [
+            'ordernumber', 'customer_type', 'created_at', 'sitename', 'dispatchcode'
+        ]
+        
+        # User-friendly column headers
+        column_headers = [
+            'Order Number', 'Customer Type', 'Picking Date', 'Site Name', 'Dispatch Code'
+        ]
+        
+        # Set table dimensions
+        self.order_table.setRowCount(len(data))
+        self.order_table.setColumnCount(len(columns))
+        self.order_table.setHorizontalHeaderLabels(column_headers)
+        
+        # Populate table with data
+        for row_idx, record in enumerate(data):
+            for col_idx, column in enumerate(columns):
+                value = record.get(column, '')
+                
+                # Format the value for display
+                if value is None:
+                    display_value = ''
+                elif isinstance(value, bool):
+                    display_value = 'Yes' if value else 'No'
+                elif isinstance(value, (dict, list)):
+                    display_value = str(value)
+                elif column == 'created_at' and value:
+                    # Format date for better readability
+                    try:
+                        from datetime import datetime
+                        if isinstance(value, str):
+                            # Parse ISO format date
+                            dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                            display_value = dt.strftime('%Y-%m-%d %H:%M')
+                        else:
+                            display_value = str(value)
+                    except:
+                        display_value = str(value)
+                else:
+                    display_value = str(value)
+                
+                # Create table item
+                item = QTableWidgetItem(display_value)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # Make read-only
+                
+                # Set special formatting for certain columns
+                if column in ['created_at']:
+                    item.setTextAlignment(Qt.AlignCenter)
+                elif column in ['ordernumber', 'dispatchcode']:
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if column == 'ordernumber':
+                        item.setFont(QFont("Consolas", 11, QFont.Weight.Bold))  # Make order numbers more prominent
+                    else:
+                        item.setFont(QFont("Consolas", 10, QFont.Weight.Normal))  # Dispatch code in monospace
+                
+                self.order_table.setItem(row_idx, col_idx, item)
+        
+        # Resize columns to content
+        self.order_table.resizeColumnsToContents()
+        
+        # Set appropriate column widths for better readability
+        column_widths = {
+            'ordernumber': 200,      # Order Number - increased width for better visibility
+            'customer_type': 150,    # Customer Type - wider for text content
+            'created_at': 140,       # Picking Date - needs space for date/time format
+            'sitename': 300,         # Site Name - longest text, needs most space
+            'dispatchcode': 120      # Dispatch Code - similar to order number
+        }
+        
+        for col in range(self.order_table.columnCount()):
+            column_name = columns[col]
+            if column_name in column_widths:
+                self.order_table.setColumnWidth(col, column_widths[column_name])
+            else:
+                # Fallback minimum width
+                current_width = self.order_table.columnWidth(col)
+                self.order_table.setColumnWidth(col, max(current_width, 120))
+        
+        # Ensure the table stretches to fill available space
+        self.order_table.horizontalHeader().setStretchLastSection(True)
+    
+    def refresh_order_data(self):
+        """Refresh the order data from Supabase"""
+        self.load_order_data()
     
     def create_unified_file_selection_column(self):
         """Create unified left column with file selection controls"""
@@ -1824,6 +2030,11 @@ class DispatchScanningApp(QMainWindow):
         self.unified_progress_bar.setVisible(False)
         layout.addWidget(self.unified_progress_bar)
         
+        # Status label
+        self.unified_status_label = QLabel("Ready to process picking sheets")
+        self.unified_status_label.setObjectName("successText")
+        layout.addWidget(self.unified_status_label)
+        
         return section
     
     def create_unified_processing_column(self):
@@ -1841,6 +2052,10 @@ class DispatchScanningApp(QMainWindow):
         # Excel column requirements section
         requirements_section = self.create_requirements_section()
         layout.addWidget(requirements_section)
+        
+        # Process button section
+        process_section = self.create_process_button_section()
+        layout.addWidget(process_section)
         
         layout.addStretch()
         return column
@@ -4792,6 +5007,136 @@ class DispatchScanningApp(QMainWindow):
                 font-family: 'Consolas', monospace;
                 font-size: 12px;
                 color: #374151;
+            }
+            
+            /* Order Management Tab Styling */
+            QTabWidget#mainTabWidget {
+                background-color: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+            }
+            
+            QTabWidget#mainTabWidget::pane {
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                background-color: white;
+            }
+            
+            QTabWidget#mainTabWidget::tab-bar {
+                alignment: left;
+            }
+            
+            QTabWidget#mainTabWidget QTabBar::tab {
+                background-color: #f8f9fa;
+                color: #6b7280;
+                border: 1px solid #e2e8f0;
+                border-bottom: none;
+                padding: 8px 16px;
+                margin-right: 2px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                font-weight: 500;
+                font-size: 13px;
+            }
+            
+            QTabWidget#mainTabWidget QTabBar::tab:selected {
+                background-color: white;
+                color: #2c3e50;
+                border-bottom: 1px solid white;
+                font-weight: 600;
+            }
+            
+            QTabWidget#mainTabWidget QTabBar::tab:hover {
+                background-color: #e9ecef;
+                color: #495057;
+            }
+            
+            QFrame#orderManagementHeader {
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                margin-bottom: 12px;
+            }
+            
+            QLabel#orderManagementTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+            
+            QPushButton#refreshButton {
+                background-color: #3498db;
+                color: white;
+                border: 1px solid #2980b9;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: 500;
+                font-size: 12px;
+            }
+            
+            QPushButton#refreshButton:hover {
+                background-color: #2980b9;
+            }
+            
+            QPushButton#refreshButton:pressed {
+                background-color: #21618c;
+            }
+            
+            QLabel#orderStatusLabel {
+                color: #6b7280;
+                font-size: 12px;
+                font-style: italic;
+            }
+            
+            QFrame#orderTableFrame {
+                background-color: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+            }
+            
+            QTableWidget#orderTable {
+                background-color: white;
+                border: none;
+                gridline-color: #e2e8f0;
+                font-size: 12px;
+            }
+            
+            QTableWidget#orderTable::item {
+                padding: 8px 12px;
+                border-bottom: 1px solid #f1f3f4;
+            }
+            
+            QTableWidget#orderTable::item:first {
+                border-left: none;
+            }
+            
+            QTableWidget#orderTable::item:last {
+                border-right: none;
+            }
+            
+            QTableWidget#orderTable::item:selected {
+                background-color: #e3f2fd;
+                color: #1976d2;
+            }
+            
+            QTableWidget#orderTable QHeaderView::section {
+                background-color: #f8f9fa;
+                border: none;
+                border-bottom: 2px solid #e2e8f0;
+                border-right: 1px solid #e2e8f0;
+                padding: 8px 12px;
+                font-weight: 600;
+                color: #2c3e50;
+                font-size: 12px;
+            }
+            
+            QTableWidget#orderTable QHeaderView::section:first {
+                border-top-left-radius: 6px;
+            }
+            
+            QTableWidget#orderTable QHeaderView::section:last {
+                border-top-right-radius: 6px;
+                border-right: none;
             }
         """)
 
