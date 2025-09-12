@@ -103,9 +103,27 @@ CREATE INDEX idx_dispatch_orders_itemcode ON dispatch_orders(itemcode);
 CREATE INDEX idx_dispatch_orders_barcode ON dispatch_orders(barcode);
 CREATE INDEX idx_dispatch_orders_excel_sequence ON dispatch_orders(excel_row_sequence);
 
+-- Table 6: Crate Verification (for tracking order verification data)
+CREATE TABLE crate_verification (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    ordernumber VARCHAR(50) NOT NULL,
+    sitename VARCHAR(100),
+    routenumber VARCHAR(50),
+    total_items INTEGER DEFAULT 0,
+    total_crates INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create indexes for performance
+CREATE INDEX idx_crate_verification_ordernumber ON crate_verification(ordernumber);
+CREATE INDEX idx_crate_verification_sitename ON crate_verification(sitename);
+CREATE INDEX idx_crate_verification_routenumber ON crate_verification(routenumber);
+
 -- Row Level Security (RLS) policies can be added here if needed
 ALTER TABLE dispatch.generated_barcodes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dispatch.order_details ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dispatch.scan_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dispatch.pick_lists ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dispatch_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crate_verification ENABLE ROW LEVEL SECURITY;

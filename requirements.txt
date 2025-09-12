@@ -14,4 +14,5 @@ python-dotenv>=1.0.0
 supabase>=2.0.0
 requests>=2.25.0
 pyserial>=3.5
-pywin32>=306 
+pywin32>=306
+pyinstaller>=5.0.0 

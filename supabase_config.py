@@ -501,6 +501,11 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str,
             result = supabase.table('dispatch_orders').insert(records).execute()
             print(f"✅ Successfully uploaded {len(records)} dispatch order items from {excel_file_name}")
             print(f"🔢 Excel row order preserved using sequence numbers 1-{len(records)}")
+            
+            # Upload to crate_verification table
+            print(f"📋 Uploading crate verification data...")
+            upload_crate_verification_data(records, excel_file_name, created_at_override)
+            
         except Exception as db_error:
             print(f"❌ Database upload error: {str(db_error)}")
             print(f"❌ Error details: {type(db_error).__name__}")
@@ -545,6 +550,69 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str,
         print(f"❌ Error uploading dispatch orders: {e}")
         print(f"❌ Error type: {type(e).__name__}")
         print(f"Excel data sample: {excel_data[:2] if excel_data else 'No data'}")
+        return False
+
+
+def upload_crate_verification_data(dispatch_records: List[Dict], excel_file_name: str, created_at_override: Optional[str] = None) -> bool:
+    """
+    Upload crate verification data to crate_verification table
+    Groups dispatch records by ordernumber and creates summary records
+    Note: total_items and total_crates are left blank (NULL) as requested
+    
+    Args:
+        dispatch_records: List of dispatch order records
+        excel_file_name: Name of the Excel file
+        created_at_override: Optional timestamp override
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Group records by ordernumber to create summary data
+        order_summaries = {}
+        
+        for record in dispatch_records:
+            ordernumber = record.get('ordernumber')
+            if not ordernumber:
+                continue
+                
+            if ordernumber not in order_summaries:
+                order_summaries[ordernumber] = {
+                    'ordernumber': ordernumber,
+                    'sitename': record.get('sitename'),
+                    'routenumber': record.get('route'),  # route field maps to routenumber
+                    'total_items': None,  # Left blank as requested
+                    'total_crates': None  # Left blank as requested
+                }
+        
+        if not order_summaries:
+            print("⚠️ No valid order summaries found for crate verification")
+            return False
+        
+        # Convert to list of records for upload
+        crate_verification_records = list(order_summaries.values())
+        
+        # Add created_at override if provided
+        if created_at_override:
+            for record in crate_verification_records:
+                record['created_at'] = created_at_override
+        
+        print(f"📋 Uploading {len(crate_verification_records)} crate verification records...")
+        
+        # Upload to crate_verification table
+        result = supabase.table('crate_verification').insert(crate_verification_records).execute()
+        print(f"✅ Successfully uploaded {len(crate_verification_records)} crate verification records")
+        
+        # Show summary
+        print("📋 Crate verification records uploaded:")
+        for record in crate_verification_records:
+            print(f"  - Order {record['ordernumber']}: Site: {record['sitename'] or 'N/A'}, Route: {record['routenumber'] or 'N/A'} (total_items and total_crates left blank)")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error uploading crate verification data: {e}")
+        print(f"❌ Error type: {type(e).__name__}")
         return False
 
 
