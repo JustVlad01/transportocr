@@ -2788,7 +2788,11 @@ class DispatchScanningApp(QMainWindow):
         self.date_button.clicked.connect(self.change_date)
         header_layout.addWidget(self.date_button)
         
-        # Printer status
+        # Printer status and selection
+        printer_group = QFrame()
+        printer_layout = QHBoxLayout(printer_group)
+        printer_layout.setSpacing(10)
+        
         self.printer_status_label = QLabel("Connected to: Not Connected")
         self.printer_status_label.setObjectName("printerStatusLabel")
         self.printer_status_label.setStyleSheet("""
@@ -2797,8 +2801,33 @@ class DispatchScanningApp(QMainWindow):
                 font-weight: bold;
             }
         """)
+        printer_layout.addWidget(self.printer_status_label)
+        
+        # Manual printer selection button
+        self.select_printer_button = QPushButton("Select Printer")
+        self.select_printer_button.setObjectName("selectPrinterButton")
+        self.select_printer_button.setStyleSheet("""
+            QPushButton#selectPrinterButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton#selectPrinterButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton#selectPrinterButton:pressed {
+                background-color: #21618c;
+            }
+        """)
+        self.select_printer_button.clicked.connect(self.show_printer_selection_dialog)
+        printer_layout.addWidget(self.select_printer_button)
+        
         header_layout.addStretch()  # Push printer status to the right
-        header_layout.addWidget(self.printer_status_label)
+        header_layout.addWidget(printer_group)
         
         header_layout.addStretch()
         layout.addWidget(header_frame)
@@ -3132,33 +3161,39 @@ Date: {created_at}"""
                 printers = [line.strip() for line in result.stdout.split('\n') 
                            if line.strip() and line.strip() != 'Name']
                 
-                # Look for ZT411 or Zebra printer
-                zt411_printer = None
+                # Look for Zebra printer with expanded search patterns
+                zebra_printer = None
                 for printer in printers:
                     printer_upper = printer.upper()
                     if ('ZT411' in printer_upper or 
+                        'ZT421' in printer_upper or
+                        'ZT231' in printer_upper or
+                        'ZT230' in printer_upper or
                         'ZEBRA' in printer_upper or 
                         'ZDESIGNER' in printer_upper or
-                        'ZPL' in printer_upper):
-                        zt411_printer = printer
+                        'ZPL' in printer_upper or
+                        'ZEBRA ZT' in printer_upper or
+                        'ZEBRA ZD' in printer_upper):
+                        zebra_printer = printer
                         break
                 
-                if zt411_printer:
-                    self.zebra_printer = zt411_printer
-                    self.printer_status_label.setText(f"Connected to: {zt411_printer}")
+                if zebra_printer:
+                    self.zebra_printer = zebra_printer
+                    self.printer_status_label.setText(f"Connected to: {zebra_printer}")
                     self.printer_status_label.setStyleSheet("""
                         QLabel#printerStatusLabel {
                             color: #27ae60;
                             font-weight: bold;
                         }
                     """)
+                    self.log_print_message(f"Successfully connected to Zebra printer: {zebra_printer}")
                     return
                 else:
-                    self.log_print_message("No Zebra ZT411 printer found in system printers")
+                    self.log_print_message("No Zebra printer found in system printers")
             else:
                 self.log_print_message(f"Could not get printer list: {result.stderr}")
             
-            # If no ZT411 found, try USB connection
+            # If no Zebra printer found in system, try USB connection with Zebra verification
             self.try_usb_connection()
                 
         except Exception as e:
@@ -3166,28 +3201,85 @@ Date: {created_at}"""
             self.try_usb_connection()
     
     def try_usb_connection(self):
-        """Try to connect via USB port"""
+        """Try to connect via USB port and verify it's a Zebra printer"""
         try:
             # Try common USB ports for Zebra printers
-            usb_ports = ['COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8']
+            usb_ports = ['COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10']
             
             for port in usb_ports:
                 try:
-                    # Test if port is available
+                    # Test if port is available and verify it's a Zebra printer
+                    ser = serial.Serial(port, 9600, timeout=2)
+                    
+                    # Send a status query to verify it's a Zebra printer
+                    # ZPL command to get printer status
+                    status_query = "~HS\r\n"
+                    ser.write(status_query.encode('utf-8'))
+                    time.sleep(0.5)  # Give printer time to respond
+                    
+                    # Try to read response
+                    response = ser.read(100).decode('utf-8', errors='ignore')
+                    ser.close()
+                    
+                    # Check if response indicates a Zebra printer
+                    if ('ZEBRA' in response.upper() or 
+                        'ZT' in response.upper() or
+                        'ZPL' in response.upper() or
+                        len(response) > 0):  # Any response suggests a printer
+                        
+                        # Store the port for printing
+                        self.zebra_printer = f"USB:{port}"
+                        
+                        self.printer_status_label.setText(f"Connected to: Zebra USB {port}")
+                        self.printer_status_label.setStyleSheet("""
+                            QLabel#printerStatusLabel {
+                                color: #27ae60;
+                                font-weight: bold;
+                            }
+                        """)
+                        self.log_print_message(f"Successfully connected to Zebra printer via USB: {port}")
+                        return
+                    
+                except Exception as port_error:
+                    # Port might be in use or not a printer, continue to next port
+                    continue
+            
+            # If no Zebra printer found on USB ports, try to find any available printer
+            self.try_fallback_usb_connection()
+            
+        except Exception as e:
+            self.printer_status_label.setText("Connected to: Connection Failed")
+            self.printer_status_label.setStyleSheet("""
+                QLabel#printerStatusLabel {
+                    color: #e74c3c;
+                    font-weight: bold;
+                }
+            """)
+            self.log_print_message(f"USB connection failed: {str(e)}")
+            self.zebra_printer = None
+    
+    def try_fallback_usb_connection(self):
+        """Fallback method to connect to any available USB port"""
+        try:
+            usb_ports = ['COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10']
+            
+            for port in usb_ports:
+                try:
+                    # Test if port is available (without verification)
                     ser = serial.Serial(port, 9600, timeout=1)
                     ser.close()
                     
-                    # Store the port for printing
+                    # Store the port for printing (assume it's a printer)
                     self.zebra_printer = f"USB:{port}"
                     
-                    self.printer_status_label.setText(f"Connected to: USB {port}")
+                    self.printer_status_label.setText(f"Connected to: USB {port} (Unverified)")
                     self.printer_status_label.setStyleSheet("""
                         QLabel#printerStatusLabel {
-                            color: #27ae60;
+                            color: #f39c12;
                             font-weight: bold;
                         }
                     """)
-                    self.log_print_message(f"Successfully connected via USB: {port}")
+                    self.log_print_message(f"Connected to USB port {port} (printer type not verified)")
                     return
                     
                 except Exception:
@@ -3201,7 +3293,7 @@ Date: {created_at}"""
                     font-weight: bold;
                 }
             """)
-            self.log_print_message("No Zebra printer found on any USB port")
+            self.log_print_message("No printer found on any USB port")
             self.zebra_printer = None
             
         except Exception as e:
@@ -3212,8 +3304,133 @@ Date: {created_at}"""
                     font-weight: bold;
                 }
             """)
-            self.log_print_message(f"USB connection failed: {str(e)}")
+            self.log_print_message(f"Fallback USB connection failed: {str(e)}")
             self.zebra_printer = None
+    
+    def show_printer_selection_dialog(self):
+        """Show dialog to manually select printer"""
+        try:
+            # Get available printers
+            result = subprocess.run(['wmic', 'printer', 'get', 'name'], 
+                                  capture_output=True, text=True, shell=True)
+            
+            printers = []
+            if result.returncode == 0:
+                printers = [line.strip() for line in result.stdout.split('\n') 
+                           if line.strip() and line.strip() != 'Name']
+            
+            # Add USB port options
+            usb_ports = ['COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10']
+            usb_options = [f"USB:{port}" for port in usb_ports]
+            
+            # Create dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Select Printer")
+            dialog.setModal(True)
+            dialog.setFixedSize(400, 300)
+            
+            layout = QVBoxLayout(dialog)
+            
+            # Title
+            title_label = QLabel("Select Printer")
+            title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+            layout.addWidget(title_label)
+            
+            # Printer list
+            printer_list = QListWidget()
+            printer_list.setStyleSheet("""
+                QListWidget {
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    padding: 5px;
+                    background-color: white;
+                }
+                QListWidget::item {
+                    padding: 8px;
+                    border-bottom: 1px solid #eee;
+                }
+                QListWidget::item:selected {
+                    background-color: #3498db;
+                    color: white;
+                }
+            """)
+            
+            # Add system printers
+            if printers:
+                system_label = QLabel("System Printers:")
+                system_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+                layout.addWidget(system_label)
+                
+                for printer in printers:
+                    printer_list.addItem(printer)
+            
+            # Add USB options
+            usb_label = QLabel("USB Ports:")
+            usb_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+            layout.addWidget(usb_label)
+            
+            for usb_option in usb_options:
+                printer_list.addItem(usb_option)
+            
+            layout.addWidget(printer_list)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            
+            cancel_button = QPushButton("Cancel")
+            cancel_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #6c757d;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                }
+                QPushButton:hover {
+                    background-color: #5a6268;
+                }
+            """)
+            cancel_button.clicked.connect(dialog.reject)
+            button_layout.addWidget(cancel_button)
+            
+            select_button = QPushButton("Select")
+            select_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #007bff;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                }
+                QPushButton:hover {
+                    background-color: #0056b3;
+                }
+            """)
+            select_button.clicked.connect(dialog.accept)
+            button_layout.addWidget(select_button)
+            
+            layout.addLayout(button_layout)
+            
+            # Show dialog
+            if dialog.exec() == QDialog.Accepted:
+                selected_item = printer_list.currentItem()
+                if selected_item:
+                    selected_printer = selected_item.text()
+                    self.zebra_printer = selected_printer
+                    
+                    # Update status
+                    self.printer_status_label.setText(f"Connected to: {selected_printer}")
+                    self.printer_status_label.setStyleSheet("""
+                        QLabel#printerStatusLabel {
+                            color: #27ae60;
+                            font-weight: bold;
+                        }
+                    """)
+                    self.log_print_message(f"Manually selected printer: {selected_printer}")
+                    
+        except Exception as e:
+            QMessageBox.warning(self, "Printer Selection Error", f"Error selecting printer: {str(e)}")
+            self.log_print_message(f"Printer selection error: {str(e)}")
     
     def show_crate_count_dialog(self):
         """Show crate count dialog after scanning order number"""
