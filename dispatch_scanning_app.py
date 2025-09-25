@@ -3586,7 +3586,7 @@ class DispatchScanningApp(QMainWindow):
             'created_at': 140,       # Picking Date - needs space for date/time format
             'sitename': 400,         # Site Name - increased width to show all text
             'route': 120,            # Route - similar to order number
-            'pdf_file_name': 250     # PDF File Name - wider for file names
+            'pdf_file_name': 500     # PDF File Name - much wider for full file names
         }
         
         for col in range(self.order_table.columnCount()):
@@ -5113,13 +5113,6 @@ Date: {created_at}"""
         self.unified_process_btn.clicked.connect(self.process_unified_flow)
         self.unified_process_btn.setEnabled(False)
         layout.addWidget(self.unified_process_btn)
-        
-        # Process with no upload button
-        self.unified_process_no_upload_btn = QPushButton("Process with no upload")
-        self.unified_process_no_upload_btn.setObjectName("noUploadButton")
-        self.unified_process_no_upload_btn.clicked.connect(self.process_unified_flow_no_upload)
-        self.unified_process_no_upload_btn.setEnabled(False)
-        layout.addWidget(self.unified_process_no_upload_btn)
         
         # Progress bar (initially hidden)
         self.unified_progress_bar = QProgressBar()
@@ -8050,26 +8043,6 @@ Date: {created_at}"""
             
             QPushButton#primaryButton:pressed {
                 background-color: #21618c;
-            }
-            
-            /* No Upload Button */
-            QPushButton#noUploadButton {
-                background-color: #e74c3c;
-                color: white;
-                border: 1px solid #c0392b;
-                padding: 8px 16px;
-                border-radius: 3px;
-                font-weight: 600;
-                font-size: 13px;
-                min-height: 24px;
-            }
-            
-            QPushButton#noUploadButton:hover {
-                background-color: #c0392b;
-            }
-            
-            QPushButton#noUploadButton:pressed {
-                background-color: #a93226;
             }
             
             /* Secondary Button */
