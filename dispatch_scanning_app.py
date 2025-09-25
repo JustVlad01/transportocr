@@ -2933,6 +2933,310 @@ class DateFilterDialog(QDialog):
         return self.start_date_edit.date(), self.end_date_edit.date()
 
 
+class DeletePickingSheetDialog(QDialog):
+    """Dialog for selecting and deleting picking sheet data by PDF file name"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Delete Picking Sheet")
+        self.setModal(True)
+        self.resize(800, 500)
+        
+        # Initialize data
+        self.pdf_files_data = []
+        self.selected_pdf_file = None
+        
+        # Setup UI
+        self.init_ui()
+        self.apply_styling()
+        self.load_pdf_files()
+    
+    def init_ui(self):
+        """Initialize the user interface"""
+        layout = QVBoxLayout(self)
+        layout.setSpacing(20)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Header
+        header_label = QLabel("Select PDF File to Delete")
+        header_label.setObjectName("headerTitle")
+        layout.addWidget(header_label)
+        
+        # Instructions
+        instructions = QLabel(
+            "Select a PDF file from the table below to delete all associated order records. "
+            "This action cannot be undone."
+        )
+        instructions.setObjectName("infoText")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Table
+        self.table = QTableWidget()
+        self.table.setObjectName("pdfTable")
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels([
+            "PDF File Name", "Order Count", "Date Added"
+        ])
+        
+        # Set table properties
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setSortingEnabled(True)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)  # PDF File Name
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)   # Order Count
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)   # Date Added
+        self.table.verticalHeader().setVisible(False)
+        
+        # Set column widths
+        self.table.setColumnWidth(1, 80)   # Order Count - smaller
+        self.table.setColumnWidth(2, 100)  # Date Added - smaller
+        
+        layout.addWidget(self.table)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        self.delete_button = QPushButton("Delete Selected")
+        self.delete_button.setObjectName("deleteButton")
+        self.delete_button.setEnabled(False)
+        self.delete_button.clicked.connect(self.confirm_delete)
+        button_layout.addWidget(self.delete_button)
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("cancelButton")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+        
+        layout.addLayout(button_layout)
+        
+        # Connect table selection
+        self.table.itemSelectionChanged.connect(self.on_selection_changed)
+    
+    def apply_styling(self):
+        """Apply styling to the dialog"""
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8fafc;
+            }
+            
+            QLabel#headerTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #1e293b;
+                margin-bottom: 10px;
+            }
+            
+            QLabel#infoText {
+                color: #6b7280;
+                font-size: 14px;
+                margin-bottom: 10px;
+            }
+            
+            QTableWidget#pdfTable {
+                gridline-color: #f1f5f9;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                background-color: white;
+            }
+            
+            QTableWidget#pdfTable::item {
+                padding: 8px;
+                border-bottom: 1px solid #f1f5f9;
+            }
+            
+            QTableWidget#pdfTable::item:selected {
+                background-color: #eff6ff;
+                color: #1e40af;
+            }
+            
+            QTableWidget#pdfTable QHeaderView::section {
+                background-color: #f8fafc;
+                border: none;
+                border-bottom: 2px solid #e2e8f0;
+                padding: 10px;
+                font-weight: 600;
+                color: #374151;
+            }
+            
+            QPushButton#deleteButton {
+                background-color: #e74c3c;
+                color: white;
+                border: 1px solid #c0392b;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: 500;
+                font-size: 14px;
+            }
+            
+            QPushButton#deleteButton:hover {
+                background-color: #c0392b;
+            }
+            
+            QPushButton#deleteButton:pressed {
+                background-color: #a93226;
+            }
+            
+            QPushButton#deleteButton:disabled {
+                background-color: #bdc3c7;
+                border-color: #95a5a6;
+                color: #7f8c8d;
+            }
+            
+            QPushButton#cancelButton {
+                background-color: #6c757d;
+                color: white;
+                border: 1px solid #5a6268;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: 500;
+                font-size: 14px;
+            }
+            
+            QPushButton#cancelButton:hover {
+                background-color: #5a6268;
+            }
+            
+            QPushButton#cancelButton:pressed {
+                background-color: #495057;
+            }
+        """)
+    
+    def load_pdf_files(self):
+        """Load PDF files data from the database"""
+        if not SUPABASE_AVAILABLE:
+            QMessageBox.warning(self, "Database Unavailable", "Supabase is not available. Cannot load PDF files.")
+            return
+        
+        try:
+            from supabase_config import get_supabase_client
+            supabase_client = get_supabase_client()
+            
+            # Get unique PDF files with order counts and dates
+            result = supabase_client.table('dispatch_orders').select('pdf_file_name, created_at').not_.is_('pdf_file_name', 'null').execute()
+            
+            if result.data:
+                # Group by PDF file name
+                pdf_groups = {}
+                for record in result.data:
+                    pdf_name = record.get('pdf_file_name', 'Unknown')
+                    created_at = record.get('created_at', '')
+                    
+                    if pdf_name not in pdf_groups:
+                        pdf_groups[pdf_name] = {
+                            'count': 0,
+                            'date': created_at
+                        }
+                    pdf_groups[pdf_name]['count'] += 1
+                
+                # Populate table
+                self.table.setRowCount(len(pdf_groups))
+                
+                for row_idx, (pdf_name, data) in enumerate(pdf_groups.items()):
+                    # PDF File Name
+                    name_item = QTableWidgetItem(pdf_name)
+                    name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+                    name_item.setToolTip(pdf_name)  # Show full name on hover
+                    self.table.setItem(row_idx, 0, name_item)
+                    
+                    # Order Count
+                    count_item = QTableWidgetItem(str(data['count']))
+                    count_item.setFlags(count_item.flags() & ~Qt.ItemIsEditable)
+                    count_item.setTextAlignment(Qt.AlignCenter)
+                    self.table.setItem(row_idx, 1, count_item)
+                    
+                    # Date Added
+                    date_str = ""
+                    if data['date']:
+                        try:
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(data['date'].replace('Z', '+00:00'))
+                            date_str = dt.strftime('%d/%m/%Y')
+                        except:
+                            date_str = str(data['date'])
+                    
+                    date_item = QTableWidgetItem(date_str)
+                    date_item.setFlags(date_item.flags() & ~Qt.ItemIsEditable)
+                    date_item.setTextAlignment(Qt.AlignCenter)
+                    self.table.setItem(row_idx, 2, date_item)
+                
+                self.pdf_files_data = list(pdf_groups.keys())
+                
+                # Resize columns to fit content
+                self.table.resizeColumnsToContents()
+                # Ensure minimum widths
+                self.table.setColumnWidth(1, max(self.table.columnWidth(1), 80))   # Order Count - smaller
+                self.table.setColumnWidth(2, max(self.table.columnWidth(2), 100))  # Date Added - smaller
+            else:
+                self.table.setRowCount(0)
+                QMessageBox.information(self, "No Data", "No PDF files found in the database.")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading PDF files: {str(e)}")
+    
+    def on_selection_changed(self):
+        """Handle table selection change"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if selected_rows:
+            row = selected_rows[0].row()
+            self.selected_pdf_file = self.table.item(row, 0).text()
+            self.delete_button.setEnabled(True)
+        else:
+            self.selected_pdf_file = None
+            self.delete_button.setEnabled(False)
+    
+    def confirm_delete(self):
+        """Show confirmation dialog and delete if confirmed"""
+        if not self.selected_pdf_file:
+            return
+        
+        # Get order count for confirmation
+        selected_row = self.table.selectionModel().selectedRows()[0].row()
+        order_count = self.table.item(selected_row, 1).text()
+        
+        reply = QMessageBox.question(
+            self,
+            "Confirm Deletion",
+            f"Are you sure you want to delete all {order_count} orders from '{self.selected_pdf_file}'?\n\nThis action cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.delete_orders()
+    
+    def delete_orders(self):
+        """Delete orders for the selected PDF file"""
+        if not SUPABASE_AVAILABLE:
+            QMessageBox.warning(self, "Database Unavailable", "Supabase is not available. Cannot delete orders.")
+            return
+        
+        try:
+            from supabase_config import get_supabase_client
+            supabase_client = get_supabase_client()
+            
+            # Delete all orders with the selected PDF file name
+            result = supabase_client.table('dispatch_orders').delete().eq('pdf_file_name', self.selected_pdf_file).execute()
+            
+            QMessageBox.information(
+                self,
+                "Deletion Successful",
+                f"Successfully deleted all orders from '{self.selected_pdf_file}'."
+            )
+            
+            # Refresh the table
+            self.load_pdf_files()
+            
+            # Close dialog
+            self.accept()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Deletion Error", f"Error deleting orders: {str(e)}")
+
+
 class DispatchScanningApp(QMainWindow):
     """Upload Excel Files, Process PDFs, Generate Barcodes"""
     
@@ -3142,6 +3446,12 @@ class DispatchScanningApp(QMainWindow):
         
         header_layout.addStretch()
         
+        # Delete Picking Sheet button
+        delete_button = QPushButton("Delete Picking Sheet")
+        delete_button.setObjectName("deleteButton")
+        delete_button.clicked.connect(self.show_delete_picking_sheet_dialog)
+        header_layout.addWidget(delete_button)
+        
         # Refresh button
         refresh_button = QPushButton("Refresh Data")
         refresh_button.setObjectName("refreshButton")
@@ -3294,6 +3604,13 @@ class DispatchScanningApp(QMainWindow):
     def refresh_order_data(self):
         """Refresh the order data from Supabase"""
         self.load_order_data()
+    
+    def show_delete_picking_sheet_dialog(self):
+        """Show the delete picking sheet dialog"""
+        dialog = DeletePickingSheetDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            # Refresh the order data after successful deletion
+            self.refresh_order_data()
     
     def create_label_printing_tab(self):
         """Create the Label Printing tab with barcode scanner and Zebra printer functionality"""
@@ -4796,6 +5113,13 @@ Date: {created_at}"""
         self.unified_process_btn.clicked.connect(self.process_unified_flow)
         self.unified_process_btn.setEnabled(False)
         layout.addWidget(self.unified_process_btn)
+        
+        # Process with no upload button
+        self.unified_process_no_upload_btn = QPushButton("Process with no upload")
+        self.unified_process_no_upload_btn.setObjectName("noUploadButton")
+        self.unified_process_no_upload_btn.clicked.connect(self.process_unified_flow_no_upload)
+        self.unified_process_no_upload_btn.setEnabled(False)
+        layout.addWidget(self.unified_process_no_upload_btn)
         
         # Progress bar (initially hidden)
         self.unified_progress_bar = QProgressBar()
@@ -7728,6 +8052,26 @@ Date: {created_at}"""
                 background-color: #21618c;
             }
             
+            /* No Upload Button */
+            QPushButton#noUploadButton {
+                background-color: #e74c3c;
+                color: white;
+                border: 1px solid #c0392b;
+                padding: 8px 16px;
+                border-radius: 3px;
+                font-weight: 600;
+                font-size: 13px;
+                min-height: 24px;
+            }
+            
+            QPushButton#noUploadButton:hover {
+                background-color: #c0392b;
+            }
+            
+            QPushButton#noUploadButton:pressed {
+                background-color: #a93226;
+            }
+            
             /* Secondary Button */
             QPushButton#secondaryButton {
                 background-color: #95a5a6;
@@ -8026,6 +8370,24 @@ Date: {created_at}"""
             
             QPushButton#refreshButton:pressed {
                 background-color: #21618c;
+            }
+            
+            QPushButton#deleteButton {
+                background-color: #e74c3c;
+                color: white;
+                border: 1px solid #c0392b;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: 500;
+                font-size: 12px;
+            }
+            
+            QPushButton#deleteButton:hover {
+                background-color: #c0392b;
+            }
+            
+            QPushButton#deleteButton:pressed {
+                background-color: #a93226;
             }
             
             QLabel#orderStatusLabel {
