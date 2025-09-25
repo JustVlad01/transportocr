@@ -323,7 +323,7 @@ def get_barcode_scan_history(order_id: str) -> List[Dict]:
         print(f"❌ Error getting scan history: {e}")
         return []
 
-def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str, created_at_override: Optional[str] = None) -> bool:
+def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str, created_at_override: Optional[str] = None, pdf_file_name: Optional[str] = None) -> bool:
     """
     Upload store orders from Excel file to dispatch_orders table
     *** ORDER PRESERVATION: Records are uploaded in EXACT Excel file order ***
@@ -464,6 +464,12 @@ def upload_store_orders_from_excel(excel_data: List[Dict], excel_file_name: str,
                     'excel_row_sequence': excel_row_index + 1,  # CRITICAL: Preserves Excel file row order (1-based)
                     'order_start_time': None  # Explicitly set to NULL to prevent automatic timestamp
                 }
+                
+                # Add pdf_file_name from the row data if available
+                if 'pdf_file_name' in item and item['pdf_file_name']:
+                    record['pdf_file_name'] = item['pdf_file_name']
+                elif pdf_file_name:
+                    record['pdf_file_name'] = pdf_file_name
                 
                 # Add the four new columns if they have values
                 if sitename_db:

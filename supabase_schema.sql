@@ -93,6 +93,7 @@ CREATE TABLE dispatch_orders (
     full_or_partial_picking BOOLEAN,
     item_skipped BOOLEAN,
     delivery_date DATE,
+    pdf_file_name TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

@@ -3171,6 +3171,7 @@ class DispatchScanningApp(QMainWindow):
         self.order_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)  # Picking Date
         self.order_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)  # Site Name (stretches)
         self.order_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)  # Route
+        self.order_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)  # PDF File Name
         self.order_table.verticalHeader().setVisible(False)
         
         table_layout.addWidget(self.order_table)
@@ -3209,12 +3210,12 @@ class DispatchScanningApp(QMainWindow):
         
         # Define column mapping - only show requested columns
         columns = [
-            'ordernumber', 'customer_type', 'created_at', 'sitename', 'route'
+            'ordernumber', 'customer_type', 'created_at', 'sitename', 'route', 'pdf_file_name'
         ]
         
         # User-friendly column headers
         column_headers = [
-            'Order Number', 'Customer Type', 'Picking Date', 'Site Name', 'Route'
+            'Order Number', 'Customer Type', 'Picking Date', 'Site Name', 'Route', 'PDF File Name'
         ]
         
         # Set table dimensions
@@ -3274,7 +3275,8 @@ class DispatchScanningApp(QMainWindow):
             'customer_type': 150,    # Customer Type - wider for text content
             'created_at': 140,       # Picking Date - needs space for date/time format
             'sitename': 400,         # Site Name - increased width to show all text
-            'dispatchcode': 120      # Dispatch Code - similar to order number
+            'route': 120,            # Route - similar to order number
+            'pdf_file_name': 250     # PDF File Name - wider for file names
         }
         
         for col in range(self.order_table.columnCount()):
@@ -5688,7 +5690,8 @@ Date: {created_at}"""
                         'sitename': site_name,  # Database expects lowercase field names
                         'accountcode': 'PICKUP',  # Default account code
                         'dispatchcode': 'PICKUP',  # Default dispatch code
-                        'route': route  # Database expects lowercase field names
+                        'route': route,  # Database expects lowercase field names
+                        'pdf_file_name': data['file']  # Add PDF file name to each row
                     }
                     excel_data.append(excel_row)
             
@@ -6400,7 +6403,12 @@ Date: {created_at}"""
                     generated_data = df_generated.to_dict('records')
                     
                     # Upload to Supabase
-                    success = upload_store_orders_from_excel(generated_data, excel_filename)
+                    # Extract PDF file name from the first row if available
+                    pdf_file_name = None
+                    if generated_data and 'pdf_file_name' in generated_data[0]:
+                        pdf_file_name = generated_data[0]['pdf_file_name']
+                    
+                    success = upload_store_orders_from_excel(generated_data, excel_filename, pdf_file_name=pdf_file_name)
                     if success:
                         self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded generated Excel file to Supabase!")
                     else:
@@ -6918,7 +6926,12 @@ Date: {created_at}"""
                             sample_row = store_order_data[0]
                             self.processing_thread.progress_signal.emit(f"📋 Sample row columns: {list(sample_row.keys())}")
                         
-                        success = upload_store_orders_from_excel(store_order_data, file_name, created_at_override=created_at_iso)
+                        # Extract PDF file name from the first row if available
+                        pdf_file_name = None
+                        if store_order_data and 'pdf_file_name' in store_order_data[0]:
+                            pdf_file_name = store_order_data[0]['pdf_file_name']
+                        
+                        success = upload_store_orders_from_excel(store_order_data, file_name, created_at_override=created_at_iso, pdf_file_name=pdf_file_name)
                         
                         if success:
                             self.processing_thread.progress_signal.emit(f"✅ Successfully uploaded {file_name} to database with Excel order preserved!")
