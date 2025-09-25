@@ -1012,7 +1012,7 @@ class MultiRegionCoordinateSelectorDialog(QDialog):
             "• Region 2 (Blue): e.g., Order number or date\n"
             "• Region 3 (Green): e.g., Customer reference\n"
             "• Region 4 (Orange): Additional data field\n"
-            "• Region 5 (Purple): Additional data field\n\n"
+            "• Region 5 (Purple): Additional text that will be appended to Region 3\n\n"
             "Use the region selector below to switch between regions, then click and drag to draw rectangles."
         )
         instructions.setObjectName("sectionTitle")
@@ -1032,6 +1032,23 @@ class MultiRegionCoordinateSelectorDialog(QDialog):
         
         region_layout.addStretch()
         layout.addLayout(region_layout)
+        
+        # Region 5 save location configuration
+        self.region_5_config_group = QGroupBox("Region 5 Save Location Configuration")
+        self.region_5_config_group.setVisible(False)  # Initially hidden
+        region_5_layout = QHBoxLayout(self.region_5_config_group)
+        
+        region_5_layout.addWidget(QLabel("Save Region 5 data to:"))
+        self.region_5_save_location = QLineEdit()
+        self.region_5_save_location.setPlaceholderText("e.g., Column L, Custom Field, etc.")
+        self.region_5_save_location.setText("Column K (Region 5 Data)")  # Default value
+        region_5_layout.addWidget(self.region_5_save_location)
+        
+        self.browse_save_location_btn = QPushButton("Browse...")
+        self.browse_save_location_btn.clicked.connect(self.browse_save_location)
+        region_5_layout.addWidget(self.browse_save_location_btn)
+        
+        layout.addWidget(self.region_5_config_group)
         
         # Graphics view for PDF display
         self.graphics_view = PDFGraphicsView(self)
@@ -1177,6 +1194,9 @@ class MultiRegionCoordinateSelectorDialog(QDialog):
         
         # Update region status
         self.update_region_status()
+        
+        # Show/hide region 5 configuration
+        self.region_5_config_group.setVisible(self.current_region == 'region_5')
     
     def update_region_status(self):
         """Update the region status display"""
@@ -1402,6 +1422,40 @@ class MultiRegionCoordinateSelectorDialog(QDialog):
         # Show dialog
         summary_dialog.exec()
     
+    def browse_save_location(self):
+        """Browse for save location for region 5 data"""
+        options = [
+            "Column K (Region 5 Data) - Default",
+            "Column L (Custom Field 1)",
+            "Column M (Custom Field 2)",
+            "Column N (Custom Field 3)",
+            "Custom Excel Column",
+            "Separate Text File",
+            "Database Field"
+        ]
+        
+        from PySide6.QtWidgets import QInputDialog
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Select Save Location for Region 5",
+            "Choose where to save Region 5 extracted data:",
+            options,
+            0,
+            False
+        )
+        
+        if ok and choice:
+            if choice == "Custom Excel Column":
+                custom_col, ok = QInputDialog.getText(
+                    self,
+                    "Custom Excel Column",
+                    "Enter custom column name (e.g., 'Custom Data', 'Notes', etc.):"
+                )
+                if ok and custom_col:
+                    self.region_5_save_location.setText(f"Column: {custom_col}")
+            else:
+                self.region_5_save_location.setText(choice)
+    
     def save_all_regions(self):
         """Save all configured regions"""
         configured_regions = [region for region in self.regions.values() if region['coordinates']]
@@ -1413,7 +1467,8 @@ class MultiRegionCoordinateSelectorDialog(QDialog):
         config = {
             'ocr_regions': self.regions,
             'setup_completed': True,
-            'setup_date': datetime.now().isoformat()
+            'setup_date': datetime.now().isoformat(),
+            'region_5_save_location': self.region_5_save_location.text()
         }
         
         config_path = Path("app_data") / "ocr_config.json"
@@ -1701,6 +1756,24 @@ class CrateCountDialog(QDialog):
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
         
+        preview_button = QPushButton("Preview Labels")
+        preview_button.setObjectName("previewButton")
+        preview_button.setStyleSheet("""
+            QPushButton#previewButton {
+                background-color: #17a2b8;
+                color: white;
+                border: 2px solid #17a2b8;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton#previewButton:hover {
+                background-color: #138496;
+            }
+        """)
+        preview_button.clicked.connect(self.preview_labels)
+        button_layout.addWidget(preview_button)
+        
         print_button = QPushButton("Print Labels")
         print_button.setObjectName("printDialogButton")
         print_button.setStyleSheet("""
@@ -1737,6 +1810,42 @@ class CrateCountDialog(QDialog):
     def get_crate_count(self):
         """Get the selected crate count"""
         return int(self.crate_spinbox.currentText())
+    
+    def preview_labels(self):
+        """Preview the labels that will be printed"""
+        if not hasattr(self.parent(), 'current_order_data') or not self.parent().current_order_data:
+            QMessageBox.warning(self, "Preview Error", "No order data available.")
+            return
+        
+        try:
+            crate_count = self.get_crate_count()
+            order_data = self.parent().current_order_data
+            
+            order_number = order_data.get('ordernumber', 'N/A')
+            site_name = order_data.get('sitename', 'N/A')
+            route = order_data.get('route', 'N/A')
+            dispatchcode = order_data.get('dispatchcode', 'N/A')
+            
+            # Create preview dialog showing all labels
+            preview_dialog = LabelPreviewDialog(
+                zpl_code="",  # We'll generate this in the dialog
+                order_number=order_number,
+                dispatchcode=dispatchcode,
+                site_name=site_name,
+                route=route,
+                crate_number=1,  # Show first crate as example
+                total_crates=crate_count,
+                parent=self
+            )
+            
+            # Update the preview dialog to show multiple labels
+            preview_dialog.setWindowTitle(f"Label Preview - {crate_count} Labels for Order {order_number}")
+            preview_dialog.update_preview_for_multiple_labels(crate_count, order_data)
+            
+            preview_dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Preview Error", f"Error generating preview: {str(e)}")
 
 
 class LabelPreviewDialog(QDialog):
@@ -1783,29 +1892,6 @@ class LabelPreviewDialog(QDialog):
         
         layout.addWidget(preview_frame)
         
-        # ZPL code section
-        zpl_group = QGroupBox("ZPL Code")
-        zpl_group.setObjectName("zplGroup")
-        zpl_layout = QVBoxLayout(zpl_group)
-        
-        self.zpl_text = QTextEdit()
-        self.zpl_text.setObjectName("zplText")
-        self.zpl_text.setMaximumHeight(150)
-        self.zpl_text.setReadOnly(True)
-        self.zpl_text.setPlainText(zpl_code)
-        self.zpl_text.setStyleSheet("""
-            QTextEdit#zplText {
-                background-color: #f8f9fa;
-                border: 1px solid #e2e8f0;
-                border-radius: 4px;
-                font-family: 'Consolas', monospace;
-                font-size: 10px;
-            }
-        """)
-        zpl_layout.addWidget(self.zpl_text)
-        
-        layout.addWidget(zpl_group)
-        
         # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -1838,11 +1924,8 @@ class LabelPreviewDialog(QDialog):
         label_widget.layout().setContentsMargins(10, 10, 10, 10)
         label_widget.layout().setSpacing(5)
         
-        # Dispatch code (top, 20% empty space, center aligned)
-        dispatch_label = QLabel(dispatchcode)
-        dispatch_label.setStyleSheet("font-size: 16px; font-weight: bold; color: black;")
-        dispatch_label.setAlignment(Qt.AlignCenter)
-        label_widget.layout().addWidget(dispatch_label)
+        # Add more empty space at top to match new ZPL positioning (moved content down)
+        label_widget.layout().addStretch(1.5)  # Fine-tuned to match adjusted positioning
         
         # Separator line
         line1 = QFrame()
@@ -1891,7 +1974,7 @@ class LabelPreviewDialog(QDialog):
         label_widget.layout().addWidget(line2)
         
         # Date (center aligned) - use selected date from parent
-        current_date = self.parent().selected_date if hasattr(self.parent(), 'selected_date') else datetime.now().strftime("%m/%d/%Y")
+        current_date = self.parent().selected_date if hasattr(self.parent(), 'selected_date') else datetime.now().strftime("%d/%m/%Y")
         date_label = QLabel(current_date)
         date_label.setStyleSheet("font-size: 10px; color: black;")
         date_label.setAlignment(Qt.AlignCenter)
@@ -1998,186 +2081,138 @@ class LabelPreviewDialog(QDialog):
         label_widget.layout().addStretch()
         
         layout.addWidget(label_widget, alignment=Qt.AlignCenter)
-
-
-class DateSelectionDialog(QDialog):
-    """Dialog for selecting the date to print on labels"""
     
-    def __init__(self, current_date, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Select Date for Labels")
-        self.setModal(True)
-        self.setFixedSize(350, 180)
-        
-        # Set dialog background to white
-        self.setStyleSheet("""
-            QDialog {
+    def update_preview_for_multiple_labels(self, crate_count, order_data):
+        """Update the preview to show multiple labels"""
+        try:
+            # Clear existing content
+            for i in reversed(range(self.layout().count())):
+                child = self.layout().itemAt(i).widget()
+                if child:
+                    child.setParent(None)
+            
+            # Get order data
+            order_number = order_data.get('ordernumber', 'N/A')
+            site_name = order_data.get('sitename', 'N/A')
+            route = order_data.get('route', 'N/A')
+            dispatchcode = order_data.get('dispatchcode', 'N/A')
+            
+            # Create scroll area for multiple labels
+            scroll_area = QScrollArea()
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            
+            # Create container widget for all labels
+            container_widget = QWidget()
+            container_layout = QVBoxLayout(container_widget)
+            container_layout.setSpacing(20)
+            container_layout.setContentsMargins(20, 20, 20, 20)
+            
+            # Generate preview for each label
+            for i in range(1, crate_count + 1):
+                # Create label preview widget
+                label_widget = self.create_single_label_preview(
+                    order_number, site_name, route, dispatchcode, i, crate_count
+                )
+                container_layout.addWidget(label_widget)
+            
+            scroll_area.setWidget(container_widget)
+            self.layout().addWidget(scroll_area)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Preview Error", f"Error updating preview: {str(e)}")
+    
+    def create_single_label_preview(self, order_number, site_name, route, dispatchcode, crate_number, total_crates):
+        """Create a single label preview widget"""
+        # Create label container
+        label_container = QFrame()
+        label_container.setFrameStyle(QFrame.Box)
+        label_container.setLineWidth(2)
+        label_container.setStyleSheet("""
+            QFrame {
                 background-color: white;
-                border: 1px solid #e0e0e0;
+                border: 2px solid #333;
                 border-radius: 8px;
+                margin: 10px;
             }
         """)
         
-        layout = QVBoxLayout()
-        layout.setSpacing(20)
-        layout.setContentsMargins(30, 25, 30, 25)
+        # Set label size (6.5cm x 13.5cm scaled down for preview)
+        label_container.setFixedSize(260, 540)  # Scaled down by 0.5 for preview
         
-        # Title
-        title_label = QLabel("Select Date to Print on Labels")
-        title_label.setObjectName("dateDialogTitle")
-        title_label.setStyleSheet("""
-            QLabel#dateDialogTitle {
-                font-size: 18px;
-                font-weight: 600;
-                color: #2c3e50;
-                padding: 0px;
-                background-color: transparent;
-            }
-        """)
-        title_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title_label)
+        layout = QVBoxLayout(label_container)
+        layout.setSpacing(5)
+        layout.setContentsMargins(10, 10, 10, 10)
         
-        # Date selection
-        self.date_edit = QDateEdit()
-        self.date_edit.setDate(QDate.fromString(current_date, "MM/dd/yyyy"))
-        self.date_edit.setCalendarPopup(True)
-        self.date_edit.setStyleSheet("""
-            QDateEdit {
-                background-color: #f8f9fa;
-                color: #2c3e50;
-                border: 2px solid #e9ecef;
-                border-radius: 6px;
-                padding: 12px 16px;
-                font-size: 16px;
-                font-weight: 500;
-                min-height: 20px;
-            }
-            QDateEdit:focus {
-                border-color: #007bff;
-                background-color: white;
-            }
-            QDateEdit::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 30px;
-                border-left: 1px solid #e9ecef;
-                background-color: #f8f9fa;
-            }
-            QDateEdit::down-arrow {
-                image: none;
-                border-left: 6px solid transparent;
-                border-right: 6px solid transparent;
-                border-top: 6px solid #6c757d;
-                margin-right: 8px;
-            }
-            QDateEdit::down-arrow:hover {
-                border-top-color: #007bff;
-            }
-        """)
-        layout.addWidget(self.date_edit, alignment=Qt.AlignCenter)
+        # Add label number
+        label_number = QLabel(f"Label {crate_number} of {total_crates}")
+        label_number.setAlignment(Qt.AlignCenter)
+        label_number.setStyleSheet("font-size: 12px; font-weight: bold; color: #666; margin-bottom: 5px;")
+        layout.addWidget(label_number)
         
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(12)
-        button_layout.addStretch()
+        # Add more empty space at top to match new ZPL positioning (moved content down)
+        layout.addStretch(1.5)  # Fine-tuned to match adjusted positioning
         
-        cancel_button = QPushButton("Cancel")
-        cancel_button.setStyleSheet("""
-            QPushButton {
-                background-color: #6c757d;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 24px;
-                font-size: 14px;
-                font-weight: 500;
-                min-width: 80px;
-            }
-            QPushButton:hover {
-                background-color: #5a6268;
-            }
-            QPushButton:pressed {
-                background-color: #545b62;
-            }
-        """)
-        cancel_button.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_button)
+        # Add separator line
+        line1 = QFrame()
+        line1.setFrameShape(QFrame.HLine)
+        line1.setStyleSheet("color: #333;")
+        layout.addWidget(line1)
         
-        ok_button = QPushButton("OK")
-        ok_button.setStyleSheet("""
-            QPushButton {
-                background-color: #007bff;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 24px;
-                font-size: 14px;
-                font-weight: 500;
-                min-width: 80px;
-            }
-            QPushButton:hover {
-                background-color: #0056b3;
-            }
-            QPushButton:pressed {
-                background-color: #004085;
-            }
-        """)
-        ok_button.clicked.connect(self.accept)
-        button_layout.addWidget(ok_button)
+        # Add site name (handle multiple lines)
+        site_lines = site_name.split('\n') if '\n' in site_name else [site_name]
+        for line in site_lines:
+            if line.strip():
+                site_label = QLabel(line.strip())
+                site_label.setAlignment(Qt.AlignLeft)
+                site_label.setStyleSheet("font-size: 20px; font-weight: bold; color: black;")
+                site_label.setWordWrap(True)
+                layout.addWidget(site_label)
         
-        layout.addLayout(button_layout)
-        self.setLayout(layout)
+        # Add separator line
+        line2 = QFrame()
+        line2.setFrameShape(QFrame.HLine)
+        line2.setStyleSheet("color: #333;")
+        layout.addWidget(line2)
         
-        # Set focus to date edit
-        self.date_edit.setFocus()
-    
-    def get_selected_date(self):
-        """Get the selected date in MM/dd/yyyy format"""
-        return self.date_edit.date().toString("MM/dd/yyyy")
+        
+        # Add crate info
+        crate_text = f"{crate_number} of {total_crates}"
+        crate_label = QLabel(crate_text)
+        crate_label.setAlignment(Qt.AlignCenter)
+        crate_label.setStyleSheet("font-size: 24px; font-weight: bold; color: black;")
+        layout.addWidget(crate_label)
+        
+        # Add separator line
+        line3 = QFrame()
+        line3.setFrameShape(QFrame.HLine)
+        line3.setStyleSheet("color: #333;")
+        layout.addWidget(line3)
+        
+        # Add barcode representation (text-based)
+        barcode_label = QLabel(f"Barcode: {order_number}")
+        barcode_label.setAlignment(Qt.AlignCenter)
+        barcode_label.setStyleSheet("font-size: 14px; font-weight: bold; color: black; background-color: #f0f0f0; padding: 5px;")
+        layout.addWidget(barcode_label)
+        
+        # Add separator line
+        line4 = QFrame()
+        line4.setFrameShape(QFrame.HLine)
+        line4.setStyleSheet("color: #333;")
+        layout.addWidget(line4)
+        
+        
+        route_value_label = QLabel(route)
+        route_value_label.setAlignment(Qt.AlignCenter)
+        route_value_label.setStyleSheet("font-size: 18px; font-weight: bold; color: black;")
+        layout.addWidget(route_value_label)
+        
+        # Add stretch to push everything to top
+        layout.addStretch()
+        
+        return label_container
 
-
-class ManualLabelDialog(QDialog):
-    """Dialog for manually entering label information"""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Manual Label Printing")
-        self.setModal(True)
-        self.setFixedSize(450, 600)
-        
-        # Set dialog background to white
-        self.setStyleSheet("""
-            QDialog {
-                background-color: white;
-                border: 1px solid #e0e0e0;
-                border-radius: 8px;
-            }
-        """)
-        
-        layout = QVBoxLayout()
-        layout.setSpacing(20)
-        layout.setContentsMargins(30, 25, 30, 25)
-        
-        # Title
-        title_label = QLabel("Manual Label Information")
-        title_label.setObjectName("manualLabelTitle")
-        title_label.setStyleSheet("""
-            QLabel#manualLabelTitle {
-                font-size: 18px;
-                font-weight: 600;
-                color: #2c3e50;
-                padding: 0px;
-                background-color: transparent;
-            }
-        """)
-        title_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title_label)
-        
-        # Form fields
-        form_layout = QVBoxLayout()
-        form_layout.setSpacing(15)
-        
-        # Order Number
         self.order_number_input = QLineEdit()
         self.order_number_input.setPlaceholderText("Enter order number")
         self.order_number_input.setStyleSheet("""
@@ -2387,6 +2422,517 @@ class ManualLabelDialog(QDialog):
         }
 
 
+class OCRDebugDialog(QDialog):
+    """Dialog for displaying OCR region debugging information"""
+    
+    def __init__(self, ocr_regions, parent=None):
+        super().__init__(parent)
+        self.ocr_regions = ocr_regions
+        self.setWindowTitle("OCR Regions Debug Information")
+        self.setModal(True)
+        self.resize(800, 600)
+        
+        self.init_ui()
+        self.apply_styling()
+    
+    def init_ui(self):
+        """Initialize the user interface"""
+        layout = QVBoxLayout(self)
+        layout.setSpacing(20)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Header
+        header_label = QLabel("🔍 OCR Regions Debug Information")
+        header_label.setObjectName("headerTitle")
+        layout.addWidget(header_label)
+        
+        # Instructions
+        instructions = QLabel(
+            "This dialog shows all configured OCR regions and their coordinates. "
+            "Use this information to verify that your OCR regions are set up correctly.\n\n"
+            "<b>To view all regions on a PDF:</b> Click 'Select PDF to View All Regions' to choose a PDF file and see all configured regions overlaid on it."
+        )
+        instructions.setObjectName("infoText")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # OCR Regions Table
+        self.regions_table = QTableWidget()
+        self.regions_table.setColumnCount(4)
+        self.regions_table.setHorizontalHeaderLabels(["Region", "Color", "Coordinates", "Status"])
+        self.regions_table.horizontalHeader().setStretchLastSection(True)
+        self.regions_table.setAlternatingRowColors(True)
+        self.regions_table.setSelectionBehavior(QTableWidget.SelectRows)
+        
+        # Populate table with OCR regions
+        self.populate_regions_table()
+        
+        layout.addWidget(self.regions_table)
+        
+        # Summary information
+        summary_label = QLabel()
+        configured_count = len([r for r in self.ocr_regions.values() if r.get('coordinates')])
+        total_count = len(self.ocr_regions)
+        summary_label.setText(f"<b>Summary:</b> {configured_count} of {total_count} regions configured")
+        summary_label.setObjectName("infoText")
+        layout.addWidget(summary_label)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.test_region_btn = QPushButton("Select PDF to View All Regions")
+        self.test_region_btn.setObjectName("secondaryButton")
+        self.test_region_btn.clicked.connect(self.select_pdf_to_view_regions)
+        self.test_region_btn.setEnabled(True)
+        self.test_region_btn.setToolTip("Click to select a PDF file and view all configured OCR regions overlaid on it")
+        
+        self.close_btn = QPushButton("Close")
+        self.close_btn.setObjectName("primaryButton")
+        self.close_btn.clicked.connect(self.accept)
+        
+        button_layout.addWidget(self.test_region_btn)
+        button_layout.addStretch()
+        button_layout.addWidget(self.close_btn)
+        
+        layout.addLayout(button_layout)
+        
+    
+    def populate_regions_table(self):
+        """Populate the regions table with OCR region data"""
+        self.regions_table.setRowCount(len(self.ocr_regions))
+        
+        for row, (region_id, region_data) in enumerate(self.ocr_regions.items()):
+            # Region name
+            region_name = region_data.get('name', region_id)
+            self.regions_table.setItem(row, 0, QTableWidgetItem(region_name))
+            
+            # Color
+            color = region_data.get('color', 'unknown')
+            color_item = QTableWidgetItem(color.title())
+            color_item.setBackground(self.get_color_brush(color))
+            self.regions_table.setItem(row, 1, color_item)
+            
+            # Coordinates
+            coordinates = region_data.get('coordinates')
+            if coordinates:
+                coord_text = f"[{', '.join(map(str, coordinates))}]"
+                status = "Configured"
+            else:
+                coord_text = "Not set"
+                status = "Not configured"
+            
+            self.regions_table.setItem(row, 2, QTableWidgetItem(coord_text))
+            self.regions_table.setItem(row, 3, QTableWidgetItem(status))
+    
+    def get_color_brush(self, color):
+        """Get a QBrush for the given color"""
+        color_map = {
+            'red': QColor(255, 200, 200),
+            'blue': QColor(200, 200, 255),
+            'green': QColor(200, 255, 200),
+            'orange': QColor(255, 220, 200),
+            'purple': QColor(220, 200, 255)
+        }
+        return QBrush(color_map.get(color, QColor(240, 240, 240)))
+    
+    
+    def select_pdf_to_view_regions(self):
+        """Select a PDF file and show all configured regions on it"""
+        # Let user select a PDF file
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select PDF File to View All OCR Regions",
+            "",
+            "PDF Files (*.pdf)"
+        )
+        
+        if file_path:
+            try:
+                # Show all regions on the selected PDF
+                self.show_all_regions_on_pdf(file_path)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to show regions on PDF: {str(e)}")
+    
+    def show_all_regions_on_pdf(self, pdf_path):
+        """Show all configured OCR regions overlaid on the PDF"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("All OCR Regions on PDF")
+        dialog.setModal(True)
+        dialog.resize(1200, 900)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Graphics view for PDF display
+        graphics_view = QGraphicsView()
+        scene = QGraphicsScene()
+        graphics_view.setScene(scene)
+        
+        try:
+            # Load PDF with PyMuPDF
+            import fitz
+            pdf_document = fitz.open(pdf_path)
+            page = pdf_document[0]
+            
+            # Convert to image
+            mat = fitz.Matrix(1.0, 1.0)
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            # Create QPixmap from image data
+            pixmap = QPixmap()
+            pixmap.loadFromData(img_data)
+            
+            # Add pixmap to scene
+            pixmap_item = scene.addPixmap(pixmap)
+            scene.setSceneRect(pixmap.rect())
+            
+            # Add all OCR region rectangles
+            regions_added = 0
+            for region_id, region_data in self.ocr_regions.items():
+                coordinates = region_data.get('coordinates')
+                if coordinates and len(coordinates) == 4:
+                    x1, y1, x2, y2 = coordinates
+                    rect = QRectF(x1, y1, x2 - x1, y2 - y1)
+                    
+                    # Set color based on region
+                    color = region_data.get('color', 'red')
+                    if color == 'red':
+                        pen_color = QColor(255, 0, 0, 200)
+                    elif color == 'blue':
+                        pen_color = QColor(0, 0, 255, 200)
+                    elif color == 'green':
+                        pen_color = QColor(0, 255, 0, 200)
+                    elif color == 'orange':
+                        pen_color = QColor(255, 165, 0, 200)
+                    elif color == 'purple':
+                        pen_color = QColor(128, 0, 128, 200)
+                    else:
+                        pen_color = QColor(128, 128, 128, 200)
+                    
+                    pen = QPen(pen_color, 3)
+                    rect_item = scene.addRect(rect, pen)
+                    rect_item.setZValue(1)
+                    
+                    # Add label
+                    text_item = scene.addText(region_data['name'], QFont("Arial", 12, QFont.Bold))
+                    text_item.setDefaultTextColor(pen_color)
+                    text_item.setPos(rect.x(), rect.y() - 20)
+                    text_item.setZValue(2)
+                    
+                    regions_added += 1
+            
+            pdf_document.close()
+            
+            # Add status label
+            status_label = QLabel(f"Showing {regions_added} configured regions on PDF: {Path(pdf_path).name}")
+            status_label.setStyleSheet("font-weight: bold; color: #2c3e50; padding: 10px;")
+            layout.addWidget(status_label)
+            
+        except Exception as e:
+            error_label = QLabel(f"Error loading PDF: {str(e)}")
+            layout.addWidget(error_label)
+        
+        layout.addWidget(graphics_view)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        dialog.exec()
+    
+    def show_region_on_pdf(self, pdf_path, region_data):
+        """Show the OCR region overlaid on the PDF"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"OCR Region: {region_data['name']}")
+        dialog.setModal(True)
+        dialog.resize(1000, 800)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Graphics view for PDF display
+        graphics_view = QGraphicsView()
+        scene = QGraphicsScene()
+        graphics_view.setScene(scene)
+        
+        try:
+            # Load PDF with PyMuPDF
+            import fitz
+            pdf_document = fitz.open(pdf_path)
+            page = pdf_document[0]
+            
+            # Convert to image
+            mat = fitz.Matrix(1.0, 1.0)
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            # Create QPixmap from image data
+            pixmap = QPixmap()
+            pixmap.loadFromData(img_data)
+            
+            # Add pixmap to scene
+            pixmap_item = scene.addPixmap(pixmap)
+            scene.setSceneRect(pixmap.rect())
+            
+            # Add OCR region rectangle
+            coordinates = region_data['coordinates']
+            x1, y1, x2, y2 = coordinates
+            rect = QRectF(x1, y1, x2 - x1, y2 - y1)
+            
+            # Set color based on region
+            color = region_data.get('color', 'red')
+            if color == 'red':
+                pen_color = QColor(255, 0, 0, 200)
+            elif color == 'blue':
+                pen_color = QColor(0, 0, 255, 200)
+            elif color == 'green':
+                pen_color = QColor(0, 255, 0, 200)
+            elif color == 'orange':
+                pen_color = QColor(255, 165, 0, 200)
+            elif color == 'purple':
+                pen_color = QColor(128, 0, 128, 200)
+            else:
+                pen_color = QColor(128, 128, 128, 200)
+            
+            pen = QPen(pen_color, 3)
+            rect_item = scene.addRect(rect, pen)
+            rect_item.setZValue(1)
+            
+            # Add label
+            text_item = scene.addText(region_data['name'], QFont("Arial", 12, QFont.Bold))
+            text_item.setDefaultTextColor(pen_color)
+            text_item.setPos(rect.x(), rect.y() - 20)
+            text_item.setZValue(2)
+            
+            pdf_document.close()
+            
+        except Exception as e:
+            error_label = QLabel(f"Error loading PDF: {str(e)}")
+            layout.addWidget(error_label)
+        
+        layout.addWidget(graphics_view)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        dialog.exec()
+    
+    def apply_styling(self):
+        """Apply styling to the dialog"""
+        self.setStyleSheet("""
+            QDialog {
+                background-color: white;
+            }
+            QLabel#headerTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #1f2937;
+                margin-bottom: 10px;
+            }
+            QLabel#infoText {
+                color: #6b7280;
+                font-size: 14px;
+                margin-bottom: 10px;
+            }
+            QTableWidget {
+                gridline-color: #e5e7eb;
+                background-color: white;
+                alternate-background-color: #f9fafb;
+                selection-background-color: #dbeafe;
+                border: 1px solid #e5e7eb;
+                border-radius: 6px;
+            }
+            QTableWidget::item {
+                padding: 8px;
+                border: none;
+            }
+            QHeaderView::section {
+                background-color: #f3f4f6;
+                padding: 8px;
+                border: none;
+                border-right: 1px solid #e5e7eb;
+                font-weight: bold;
+            }
+            QPushButton#primaryButton {
+                background-color: #2563eb;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-weight: 500;
+                font-size: 14px;
+                min-width: 100px;
+            }
+            QPushButton#primaryButton:hover {
+                background-color: #1d4ed8;
+            }
+            QPushButton#secondaryButton {
+                background-color: #6b7280;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-weight: 500;
+                font-size: 14px;
+                min-width: 100px;
+            }
+            QPushButton#secondaryButton:hover {
+                background-color: #4b5563;
+            }
+        """)
+
+
+class DateFilterDialog(QDialog):
+    """Dialog for filtering print history by date range"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Filter Print History by Date")
+        self.setModal(True)
+        self.setFixedSize(400, 200)
+        
+        # Set dialog background to white
+        self.setStyleSheet("""
+            QDialog {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+            }
+        """)
+        
+        layout = QVBoxLayout()
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 25, 30, 25)
+        
+        # Title
+        title_label = QLabel("Filter Print History by Date Range")
+        title_label.setObjectName("dateFilterTitle")
+        title_label.setStyleSheet("""
+            QLabel#dateFilterTitle {
+                font-size: 18px;
+                font-weight: 600;
+                color: #2c3e50;
+                padding: 0px;
+                background-color: transparent;
+            }
+        """)
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        # Date range selection
+        date_layout = QHBoxLayout()
+        date_layout.setSpacing(15)
+        
+        # Start date
+        start_label = QLabel("From:")
+        start_label.setStyleSheet("font-weight: bold; color: #2c3e50;")
+        date_layout.addWidget(start_label)
+        
+        self.start_date_edit = QDateEdit()
+        self.start_date_edit.setDate(QDate.currentDate().addDays(-7))  # Default to 7 days ago
+        self.start_date_edit.setCalendarPopup(True)
+        self.start_date_edit.setDisplayFormat("dd/MM/yyyy")
+        self.start_date_edit.setStyleSheet("""
+            QDateEdit {
+                background-color: white;
+                color: black;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 14px;
+                min-height: 20px;
+            }
+            QDateEdit:focus {
+                border-color: #3b82f6;
+            }
+        """)
+        date_layout.addWidget(self.start_date_edit)
+        
+        # End date
+        end_label = QLabel("To:")
+        end_label.setStyleSheet("font-weight: bold; color: #2c3e50;")
+        date_layout.addWidget(end_label)
+        
+        self.end_date_edit = QDateEdit()
+        self.end_date_edit.setDate(QDate.currentDate())  # Default to today
+        self.end_date_edit.setCalendarPopup(True)
+        self.end_date_edit.setDisplayFormat("dd/MM/yyyy")
+        self.end_date_edit.setStyleSheet("""
+            QDateEdit {
+                background-color: white;
+                color: black;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 14px;
+                min-height: 20px;
+            }
+            QDateEdit:focus {
+                border-color: #3b82f6;
+            }
+        """)
+        date_layout.addWidget(self.end_date_edit)
+        
+        layout.addLayout(date_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(12)
+        button_layout.addStretch()
+        
+        # Cancel button
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 24px;
+                font-size: 14px;
+                font-weight: 500;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #5a6268;
+            }
+        """)
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+        
+        # Filter button
+        filter_button = QPushButton("Filter")
+        filter_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 24px;
+                font-size: 14px;
+                font-weight: 500;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+        """)
+        filter_button.clicked.connect(self.accept)
+        button_layout.addWidget(filter_button)
+        
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+        
+        # Set focus to start date
+        self.start_date_edit.setFocus()
+    
+    def get_date_range(self):
+        """Get the selected date range"""
+        return self.start_date_edit.date(), self.end_date_edit.date()
+
+
 class DispatchScanningApp(QMainWindow):
     """Upload Excel Files, Process PDFs, Generate Barcodes"""
     
@@ -2416,8 +2962,6 @@ class DispatchScanningApp(QMainWindow):
         self.internal_excel_data = []  # Store Excel data internally instead of generating file
         self.picking_sheet_files = []  # Store picking sheet PDF files
         
-        # Label printing data
-        self.selected_date = datetime.now().strftime("%m/%d/%Y")  # Default to current date
         
         # OCR Configuration - Multiple regions (hardcoded coordinates)
         self.ocr_regions = {
@@ -2425,8 +2969,9 @@ class DispatchScanningApp(QMainWindow):
             'region_2': {'coordinates': [432, 44, 591, 65], 'color': 'blue', 'name': 'Region 2'},
             'region_3': {'coordinates': [23, 47, 326, 73], 'color': 'green', 'name': 'Region 3'},
             'region_4': {'coordinates': [28, 772, 183, 799], 'color': 'orange', 'name': 'Region 4'},
-            'region_5': {'coordinates': None, 'color': 'purple', 'name': 'Region 5'}
+            'region_5': {'coordinates': [28, 72, 328, 92], 'color': 'purple', 'name': 'Region 5'}  # Hardcoded to address line location
         }
+        self.region_5_save_location = 'Column K (Region 5 Data)'  # Default save location
         self.ocr_setup_completed = True  # Mark as completed since coordinates are hardcoded
         
         # Print hardcoded OCR configuration
@@ -2441,6 +2986,10 @@ class DispatchScanningApp(QMainWindow):
         
         # Load existing data
         self.load_existing_delivery_data()
+        
+        # Load OCR configuration
+        self.load_ocr_config()
+        
         self.update_status("Ready")
     
     def init_ui(self):
@@ -2529,6 +3078,10 @@ class DispatchScanningApp(QMainWindow):
         label_printing_tab = self.create_label_printing_tab()
         tab_widget.addTab(label_printing_tab, "Label Printing")
         
+        # Tab 4: Print History (new functionality)
+        print_history_tab = self.create_print_history_tab()
+        tab_widget.addTab(print_history_tab, "Print History")
+        
         return tab_widget
     
     def create_main_processing_tab(self):
@@ -2563,33 +3116,37 @@ class DispatchScanningApp(QMainWindow):
         # Header section
         header_frame = QFrame()
         header_frame.setObjectName("orderManagementHeader")
+        header_frame.setStyleSheet("""
+            QFrame#orderManagementHeader {
+                background-color: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                margin: 0px;
+            }
+        """)
         header_layout = QHBoxLayout(header_frame)
         header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(10)
         
         # Title
         title_label = QLabel("Order Management")
         title_label.setObjectName("orderManagementTitle")
         title_label.setStyleSheet("""
             QLabel#orderManagementTitle {
-                font-size: 18px;
+                font-size: 14px;
                 font-weight: bold;
                 color: #2c3e50;
             }
         """)
         header_layout.addWidget(title_label)
         
+        header_layout.addStretch()
+        
         # Refresh button
         refresh_button = QPushButton("Refresh Data")
         refresh_button.setObjectName("refreshButton")
         refresh_button.clicked.connect(self.refresh_order_data)
         header_layout.addWidget(refresh_button)
-        
-        # Status label
-        self.order_status_label = QLabel("Ready")
-        self.order_status_label.setObjectName("orderStatusLabel")
-        header_layout.addWidget(self.order_status_label)
-        
-        header_layout.addStretch()
         layout.addWidget(header_frame)
         
         # Table section
@@ -2613,7 +3170,7 @@ class DispatchScanningApp(QMainWindow):
         self.order_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)  # Customer Type
         self.order_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)  # Picking Date
         self.order_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)  # Site Name (stretches)
-        self.order_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)  # Dispatch Code
+        self.order_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)  # Route
         self.order_table.verticalHeader().setVisible(False)
         
         table_layout.addWidget(self.order_table)
@@ -2627,13 +3184,9 @@ class DispatchScanningApp(QMainWindow):
     def load_order_data(self):
         """Load order data from Supabase dispatch_orders table"""
         if not SUPABASE_AVAILABLE:
-            self.order_status_label.setText("Supabase not available")
             return
         
         try:
-            self.order_status_label.setText("Loading data...")
-            QApplication.processEvents()  # Update UI
-            
             # Get Supabase client
             supabase_client = get_supabase_client()
             
@@ -2642,14 +3195,11 @@ class DispatchScanningApp(QMainWindow):
             
             if result.data:
                 self.populate_order_table(result.data)
-                self.order_status_label.setText(f"Loaded {len(result.data)} orders")
             else:
-                self.order_status_label.setText("No orders found")
                 self.order_table.setRowCount(0)
                 self.order_table.setColumnCount(0)
                 
         except Exception as e:
-            self.order_status_label.setText(f"Error loading data: {str(e)}")
             print(f"Error loading order data: {e}")
     
     def populate_order_table(self, data):
@@ -2659,12 +3209,12 @@ class DispatchScanningApp(QMainWindow):
         
         # Define column mapping - only show requested columns
         columns = [
-            'ordernumber', 'customer_type', 'created_at', 'sitename', 'dispatchcode'
+            'ordernumber', 'customer_type', 'created_at', 'sitename', 'route'
         ]
         
         # User-friendly column headers
         column_headers = [
-            'Order Number', 'Customer Type', 'Picking Date', 'Site Name', 'Dispatch Code'
+            'Order Number', 'Customer Type', 'Picking Date', 'Site Name', 'Route'
         ]
         
         # Set table dimensions
@@ -2691,7 +3241,7 @@ class DispatchScanningApp(QMainWindow):
                         if isinstance(value, str):
                             # Parse ISO format date
                             dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
-                            display_value = dt.strftime('%Y-%m-%d %H:%M')
+                            display_value = dt.strftime('%d/%m/%Y')
                         else:
                             display_value = str(value)
                     except:
@@ -2723,7 +3273,7 @@ class DispatchScanningApp(QMainWindow):
             'ordernumber': 200,      # Order Number - increased width for better visibility
             'customer_type': 150,    # Customer Type - wider for text content
             'created_at': 140,       # Picking Date - needs space for date/time format
-            'sitename': 300,         # Site Name - longest text, needs most space
+            'sitename': 400,         # Site Name - increased width to show all text
             'dispatchcode': 120      # Dispatch Code - similar to order number
         }
         
@@ -2750,103 +3300,92 @@ class DispatchScanningApp(QMainWindow):
         layout.setSpacing(12)
         layout.setContentsMargins(12, 12, 12, 12)
         
-        # Header section
+        # Header section - matching Order Management style
         header_frame = QFrame()
         header_frame.setObjectName("labelPrintingHeader")
+        header_frame.setStyleSheet("""
+            QFrame#labelPrintingHeader {
+                background-color: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                margin: 0px;
+            }
+        """)
         header_layout = QHBoxLayout(header_frame)
         header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(10)
         
         # Title
         title_label = QLabel("Label Printing")
         title_label.setObjectName("labelPrintingTitle")
         title_label.setStyleSheet("""
             QLabel#labelPrintingTitle {
-                font-size: 18px;
+                font-size: 14px;
                 font-weight: bold;
                 color: #2c3e50;
             }
         """)
         header_layout.addWidget(title_label)
         
-        # Date selection button
-        self.date_button = QPushButton(f"Date: {self.selected_date}")
-        self.date_button.setObjectName("dateButton")
-        self.date_button.setStyleSheet("""
-            QPushButton#dateButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 8px 16px;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton#dateButton:hover {
-                background-color: #2980b9;
-            }
-        """)
-        self.date_button.clicked.connect(self.change_date)
-        header_layout.addWidget(self.date_button)
+        header_layout.addStretch()
         
-        # Printer status and selection
-        printer_group = QFrame()
-        printer_layout = QHBoxLayout(printer_group)
-        printer_layout.setSpacing(10)
-        
+        # Printer status
         self.printer_status_label = QLabel("Connected to: Not Connected")
         self.printer_status_label.setObjectName("printerStatusLabel")
         self.printer_status_label.setStyleSheet("""
             QLabel#printerStatusLabel {
                 color: #e74c3c;
                 font-weight: bold;
-            }
-        """)
-        printer_layout.addWidget(self.printer_status_label)
-        
-        # Manual printer selection button
-        self.select_printer_button = QPushButton("Select Printer")
-        self.select_printer_button.setObjectName("selectPrinterButton")
-        self.select_printer_button.setStyleSheet("""
-            QPushButton#selectPrinterButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 6px 12px;
                 font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton#selectPrinterButton:hover {
-                background-color: #2980b9;
-            }
-            QPushButton#selectPrinterButton:pressed {
-                background-color: #21618c;
             }
         """)
-        self.select_printer_button.clicked.connect(self.show_printer_selection_dialog)
-        printer_layout.addWidget(self.select_printer_button)
+        header_layout.addWidget(self.printer_status_label)
         
-        header_layout.addStretch()  # Push printer status to the right
-        header_layout.addWidget(printer_group)
+        # Printer scanning status indicator
+        self.printer_scanning_label = QLabel("🔍 Scanning...")
+        self.printer_scanning_label.setObjectName("printerScanningLabel")
+        self.printer_scanning_label.setStyleSheet("""
+            QLabel#printerScanningLabel {
+                color: #f39c12;
+                font-weight: bold;
+                font-size: 12px;
+            }
+        """)
+        header_layout.addWidget(self.printer_scanning_label)
         
-        header_layout.addStretch()
         layout.addWidget(header_frame)
         
-        # Main content area
+        # Main content area - matching Order Management style
         content_frame = QFrame()
+        content_frame.setObjectName("labelPrintingContent")
         content_layout = QHBoxLayout(content_frame)
-        content_layout.setSpacing(20)
+        content_layout.setSpacing(12)
+        content_layout.setContentsMargins(0, 0, 0, 0)
         
         # Left column - Scanner and Order Info
         left_column = QFrame()
         left_column.setObjectName("leftColumn")
-        left_column.setFixedWidth(400)
         left_layout = QVBoxLayout(left_column)
         left_layout.setSpacing(12)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         
         # Barcode Scanner Section
         scanner_group = QGroupBox("Barcode Scanner")
         scanner_group.setObjectName("scannerGroup")
+        scanner_group.setStyleSheet("""
+            QGroupBox#scannerGroup {
+                font-weight: bold;
+                border: 2px solid #e2e8f0;
+                border-radius: 6px;
+                margin-top: 0px;
+                padding-top: 10px;
+            }
+            QGroupBox#scannerGroup::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+            }
+        """)
         scanner_layout = QVBoxLayout(scanner_group)
         scanner_layout.setSpacing(8)
         
@@ -2884,51 +3423,6 @@ class DispatchScanningApp(QMainWindow):
         scanner_layout.addWidget(self.order_info_label)
         
         left_layout.addWidget(scanner_group)
-        
-        # Manual Print Section
-        manual_group = QGroupBox("Manual Printing")
-        manual_group.setObjectName("manualGroup")
-        manual_layout = QVBoxLayout(manual_group)
-        manual_layout.setSpacing(8)
-        
-        # Manual print button
-        self.manual_print_button = QPushButton("Print Label Manually")
-        self.manual_print_button.setObjectName("manualPrintButton")
-        self.manual_print_button.setStyleSheet("""
-            QPushButton#manualPrintButton {
-                background-color: #28a745;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 12px 20px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton#manualPrintButton:hover {
-                background-color: #218838;
-            }
-            QPushButton#manualPrintButton:pressed {
-                background-color: #1e7e34;
-            }
-        """)
-        self.manual_print_button.clicked.connect(self.open_manual_print_dialog)
-        manual_layout.addWidget(self.manual_print_button)
-        
-        # Manual print info
-        manual_info_label = QLabel("Enter label information manually without scanning")
-        manual_info_label.setObjectName("manualInfoLabel")
-        manual_info_label.setStyleSheet("""
-            QLabel#manualInfoLabel {
-                color: #6c757d;
-                font-size: 12px;
-                font-style: italic;
-            }
-        """)
-        manual_info_label.setWordWrap(True)
-        manual_layout.addWidget(manual_info_label)
-        
-        left_layout.addWidget(manual_group)
-        
         left_layout.addStretch()
         
         content_layout.addWidget(left_column)
@@ -2939,18 +3433,15 @@ class DispatchScanningApp(QMainWindow):
         right_layout = QVBoxLayout(right_column)
         right_layout.setSpacing(12)
         
-        
-        # Print Log Section (Collapsible)
+        # Print Log Section
         log_group = QGroupBox("Print Log")
         log_group.setObjectName("logGroup")
-        log_group.setCheckable(True)
-        log_group.setChecked(False)  # Start collapsed
         log_group.setStyleSheet("""
             QGroupBox#logGroup {
                 font-weight: bold;
                 border: 2px solid #e2e8f0;
                 border-radius: 6px;
-                margin-top: 10px;
+                margin-top: 0px;
                 padding-top: 10px;
             }
             QGroupBox#logGroup::title {
@@ -2978,12 +3469,6 @@ class DispatchScanningApp(QMainWindow):
         """)
         log_layout.addWidget(self.print_log)
         
-        # View Logs Button
-        self.view_logs_button = QPushButton("View Logs")
-        self.view_logs_button.setObjectName("viewLogsButton")
-        self.view_logs_button.clicked.connect(self.show_logs_dialog)
-        log_layout.addWidget(self.view_logs_button)
-        
         right_layout.addWidget(log_group)
         right_layout.addStretch()
         
@@ -2997,15 +3482,395 @@ class DispatchScanningApp(QMainWindow):
         # Auto-connect to printer
         self.auto_connect_printer()
         
+        # Set up continuous printer scanning
+        self.setup_printer_scanning()
+        
         # Set up barcode scanner monitoring
         self.setup_barcode_scanner()
         
         return tab_widget
     
+    def create_print_history_tab(self):
+        """Create the Print History tab to show print records"""
+        tab_widget = QWidget()
+        layout = QVBoxLayout(tab_widget)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+        
+        # Header section
+        header_frame = QFrame()
+        header_frame.setObjectName("printHistoryHeader")
+        header_frame.setStyleSheet("""
+            QFrame#printHistoryHeader {
+                background-color: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                margin: 0px;
+            }
+        """)
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setSpacing(10)
+        
+        # Title
+        title_label = QLabel("Print History")
+        title_label.setObjectName("printHistoryTitle")
+        title_label.setStyleSheet("""
+            QLabel#printHistoryTitle {
+                font-size: 14px;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+        """)
+        header_layout.addWidget(title_label)
+        
+        header_layout.addStretch()
+        
+        # Date filter button
+        self.date_filter_button = QPushButton("Filter by Date")
+        self.date_filter_button.setObjectName("dateFilterButton")
+        self.date_filter_button.setStyleSheet("""
+            QPushButton#dateFilterButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton#dateFilterButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        self.date_filter_button.clicked.connect(self.show_date_filter_dialog)
+        header_layout.addWidget(self.date_filter_button)
+        
+        # Refresh button
+        self.refresh_history_button = QPushButton("Refresh")
+        self.refresh_history_button.setObjectName("refreshHistoryButton")
+        self.refresh_history_button.setStyleSheet("""
+            QPushButton#refreshHistoryButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton#refreshHistoryButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        self.refresh_history_button.clicked.connect(self.refresh_print_history)
+        header_layout.addWidget(self.refresh_history_button)
+        layout.addWidget(header_frame)
+        
+        # Print history table
+        self.print_history_table = QTableWidget()
+        self.print_history_table.setObjectName("printHistoryTable")
+        self.print_history_table.setAlternatingRowColors(True)
+        self.print_history_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.print_history_table.setSortingEnabled(True)
+        
+        # Set table headers
+        headers = ["Order Number", "Site Name", "Crate Quantity", "Route", "Printed At"]
+        self.print_history_table.setColumnCount(len(headers))
+        self.print_history_table.setHorizontalHeaderLabels(headers)
+        
+        # Configure table appearance
+        self.print_history_table.horizontalHeader().setStretchLastSection(True)
+        
+        # Auto-resize columns to fit content
+        self.print_history_table.resizeColumnsToContents()
+        self.print_history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        
+        # Set minimum column widths to ensure readability
+        self.print_history_table.setColumnWidth(0, 120)  # Order Number
+        self.print_history_table.setColumnWidth(1, 200)  # Site Name
+        self.print_history_table.setColumnWidth(2, 100)  # Crate Quantity
+        self.print_history_table.setColumnWidth(3, 100)  # Route
+        self.print_history_table.setColumnWidth(4, 150)  # Printed At
+        
+        self.print_history_table.setStyleSheet("""
+            QTableWidget#printHistoryTable {
+                gridline-color: #e0e0e0;
+                background-color: white;
+                alternate-background-color: #f8f9fa;
+                selection-background-color: #e3f2fd;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+            }
+            QTableWidget#printHistoryTable::item {
+                padding: 8px;
+                border: none;
+            }
+            QHeaderView::section {
+                background-color: #f5f5f5;
+                padding: 8px;
+                border: none;
+                border-right: 1px solid #e0e0e0;
+                font-weight: bold;
+            }
+        """)
+        
+        layout.addWidget(self.print_history_table)
+        
+        # Load initial data
+        self.load_print_history()
+        
+        return tab_widget
+    
+    def load_print_history(self):
+        """Load print history from Supabase"""
+        if not SUPABASE_AVAILABLE:
+            self.print_history_table.setRowCount(0)
+            return
+        
+        try:
+            # Get Supabase client
+            supabase_client = get_supabase_client()
+            
+            # Query the print_history table
+            response = supabase_client.table('print_history').select('*').order('printed_at', desc=True).execute()
+            
+            if response.data:
+                self.print_history_table.setRowCount(len(response.data))
+                
+                for row_idx, record in enumerate(response.data):
+                    # Order Number
+                    self.print_history_table.setItem(row_idx, 0, QTableWidgetItem(record.get('order_number', 'N/A')))
+                    
+                    # Site Name
+                    self.print_history_table.setItem(row_idx, 1, QTableWidgetItem(record.get('site_name', 'N/A')))
+                    
+                    # Crate Quantity
+                    self.print_history_table.setItem(row_idx, 2, QTableWidgetItem(str(record.get('crate_quantity', 0))))
+                    
+                    # Route
+                    self.print_history_table.setItem(row_idx, 3, QTableWidgetItem(record.get('route', 'N/A')))
+                    
+                    # Printed At
+                    printed_at = record.get('printed_at', '')
+                    if printed_at:
+                        # Format timestamp for display (dd/MM/yyyy)
+                        try:
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(printed_at.replace('Z', '+00:00'))
+                            formatted_time = dt.strftime('%d/%m/%Y')
+                        except:
+                            formatted_time = printed_at
+                    else:
+                        formatted_time = 'N/A'
+                    self.print_history_table.setItem(row_idx, 4, QTableWidgetItem(formatted_time))
+                
+                # Auto-resize columns after data is loaded
+                self.print_history_table.resizeColumnsToContents()
+            else:
+                self.print_history_table.setRowCount(0)
+                
+        except Exception as e:
+            print(f"Error loading print history: {e}")
+            self.print_history_table.setRowCount(0)
+    
+    def refresh_print_history(self):
+        """Refresh the print history table"""
+        self.load_print_history()
+    
+    def show_date_filter_dialog(self):
+        """Show date filter dialog for print history"""
+        dialog = DateFilterDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            start_date, end_date = dialog.get_date_range()
+            self.filter_print_history_by_date(start_date, end_date)
+    
+    def filter_print_history_by_date(self, start_date, end_date):
+        """Filter print history by date range"""
+        if not SUPABASE_AVAILABLE:
+            self.print_history_table.setRowCount(0)
+            return
+        
+        try:
+            # Get Supabase client
+            supabase_client = get_supabase_client()
+            
+            # Build query with date filter
+            query = supabase_client.table('print_history').select('*')
+            
+            if start_date:
+                # Convert to ISO format for Supabase
+                start_iso = start_date.toString('yyyy-MM-dd') + 'T00:00:00Z'
+                query = query.gte('printed_at', start_iso)
+            
+            if end_date:
+                # Convert to ISO format for Supabase (end of day)
+                end_iso = end_date.toString('yyyy-MM-dd') + 'T23:59:59Z'
+                query = query.lte('printed_at', end_iso)
+            
+            # Execute query
+            response = query.order('printed_at', desc=True).execute()
+            
+            if response.data:
+                self.print_history_table.setRowCount(len(response.data))
+                
+                for row_idx, record in enumerate(response.data):
+                    # Order Number
+                    self.print_history_table.setItem(row_idx, 0, QTableWidgetItem(record.get('order_number', 'N/A')))
+                    
+                    # Site Name
+                    self.print_history_table.setItem(row_idx, 1, QTableWidgetItem(record.get('site_name', 'N/A')))
+                    
+                    # Crate Quantity
+                    self.print_history_table.setItem(row_idx, 2, QTableWidgetItem(str(record.get('crate_quantity', 0))))
+                    
+                    # Route
+                    self.print_history_table.setItem(row_idx, 3, QTableWidgetItem(record.get('route', 'N/A')))
+                    
+                    # Printed At
+                    printed_at = record.get('printed_at', '')
+                    if printed_at:
+                        # Format timestamp for display (dd/MM/yyyy)
+                        try:
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(printed_at.replace('Z', '+00:00'))
+                            formatted_time = dt.strftime('%d/%m/%Y')
+                        except:
+                            formatted_time = printed_at
+                    else:
+                        formatted_time = 'N/A'
+                    self.print_history_table.setItem(row_idx, 4, QTableWidgetItem(formatted_time))
+                
+                # Auto-resize columns after data is loaded
+                self.print_history_table.resizeColumnsToContents()
+            else:
+                self.print_history_table.setRowCount(0)
+                
+        except Exception as e:
+            print(f"Error filtering print history: {e}")
+            self.print_history_table.setRowCount(0)
+    
+    def record_print_event(self, order_number, site_name, crate_quantity, route, printed_by):
+        """Record a print event in the database"""
+        if not SUPABASE_AVAILABLE:
+            print("Supabase not available - cannot record print event")
+            return
+        
+        try:
+            from datetime import datetime
+            
+            # Get Supabase client
+            supabase_client = get_supabase_client()
+            
+            # Prepare the record data
+            record_data = {
+                'order_number': order_number,
+                'site_name': site_name,
+                'crate_quantity': crate_quantity,
+                'route': route,
+                'printed_by': printed_by,
+                'printed_at': datetime.now().isoformat()
+            }
+            
+            # Insert the record
+            response = supabase_client.table('print_history').insert(record_data).execute()
+            
+            if response.data:
+                print(f"Print event recorded: {order_number} - {crate_quantity} crates")
+            else:
+                print("Failed to record print event")
+                
+        except Exception as e:
+            print(f"Error recording print event: {e}")
+    
     def auto_connect_printer(self):
         """Automatically connect to printer on startup"""
         self.log_print_message("Auto-connecting to printer...")
         self.connect_printer()
+    
+    def setup_printer_scanning(self):
+        """Set up continuous printer scanning"""
+        # Create a timer to continuously scan for printers
+        self.printer_scan_timer = QTimer()
+        self.printer_scan_timer.timeout.connect(self.scan_for_printer)
+        self.printer_scan_timer.start(5000)  # Check every 5 seconds
+        
+        self.log_print_message("Continuous printer scanning started")
+    
+    def scan_for_printer(self):
+        """Continuously scan for available printers"""
+        # Only scan if we don't have a printer connected
+        if not self.zebra_printer:
+            self.log_print_message("Scanning for printer...")
+            self.connect_printer()
+        else:
+            # Verify the current printer is still available
+            if not self.verify_printer_connection():
+                self.log_print_message("Printer connection lost, scanning for new printer...")
+                self.zebra_printer = None
+                self.update_printer_status("Not Connected", "#e74c3c")
+                self.connect_printer()
+    
+    def verify_printer_connection(self):
+        """Verify that the current printer is still connected and responsive"""
+        try:
+            if self.zebra_printer and not self.zebra_printer.startswith("USB:"):
+                # For system printers, check if they're still available
+                return self.test_printer_connectivity(self.zebra_printer)
+            elif self.zebra_printer and self.zebra_printer.startswith("USB:"):
+                # For USB printers, test the connection more thoroughly
+                port = self.zebra_printer.replace("USB:", "")
+                try:
+                    ser = serial.Serial(port, 9600, timeout=2)
+                    
+                    # Send a status query to verify it's still responsive
+                    status_query = "~HS\r\n"
+                    ser.write(status_query.encode('utf-8'))
+                    time.sleep(0.5)  # Give printer time to respond
+                    
+                    # Try to read response
+                    response = ser.read(100).decode('utf-8', errors='ignore')
+                    ser.close()
+                    
+                    # Check if we got a valid response
+                    if len(response) > 0 and ('ZEBRA' in response.upper() or 'ZT' in response.upper() or 'ZPL' in response.upper()):
+                        return True
+                    else:
+                        return False
+                except:
+                    return False
+            return False
+        except Exception as e:
+            self.log_print_message(f"Error verifying printer connection: {str(e)}")
+            return False
+    
+    def update_printer_status(self, status_text, color):
+        """Update printer status display"""
+        self.printer_status_label.setText(f"Connected to: {status_text}")
+        self.printer_status_label.setStyleSheet(f"""
+            QLabel#printerStatusLabel {{
+                color: {color};
+                font-weight: bold;
+                font-size: 12px;
+            }}
+        """)
+        
+        # Update scanning indicator
+        if status_text == "Not Connected":
+            self.printer_scanning_label.setText("🔍 Scanning...")
+            self.printer_scanning_label.setStyleSheet("""
+                QLabel#printerScanningLabel {
+                    color: #f39c12;
+                    font-weight: bold;
+                    font-size: 12px;
+                }
+            """)
+        else:
+            self.printer_scanning_label.setText("✅ Connected")
+            self.printer_scanning_label.setStyleSheet("""
+                QLabel#printerScanningLabel {
+                    color: #27ae60;
+                    font-weight: bold;
+                    font-size: 12px;
+                }
+            """)
     
     def setup_barcode_scanner(self):
         """Set up continuous barcode scanner monitoring"""
@@ -3066,6 +3931,26 @@ class DispatchScanningApp(QMainWindow):
         self.processing_scan = False
         self.current_processing_order = None
     
+    def highlight_order_input(self, is_processing):
+        """Provide visual feedback for order input processing"""
+        if is_processing:
+            self.order_number_input.setStyleSheet("""
+                QLineEdit#orderNumberInput {
+                    border: 2px solid #f39c12;
+                    background-color: #fefbf3;
+                }
+            """)
+        else:
+            self.order_number_input.setStyleSheet("""
+                QLineEdit#orderNumberInput {
+                    border: 1px solid #d1d5db;
+                    background-color: white;
+                }
+                QLineEdit#orderNumberInput:focus {
+                    border-color: #27ae60;
+                }
+            """)
+    
     def on_order_number_entered(self):
         """Handle order number input from barcode scanner or manual entry"""
         order_number = self.order_number_input.text().strip()
@@ -3080,6 +3965,9 @@ class DispatchScanningApp(QMainWindow):
         # Skip if we're already processing a scan
         if self.processing_scan:
             return
+        
+        # Visual feedback - highlight the input field
+        self.highlight_order_input(True)
         
         self.log_print_message(f"Scanning order number: {order_number}")
         self.fetch_order_data(order_number)
@@ -3123,7 +4011,7 @@ class DispatchScanningApp(QMainWindow):
                     try:
                         from datetime import datetime
                         dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                        created_at = dt.strftime('%Y-%m-%d %H:%M')
+                        created_at = dt.strftime('%d/%m/%Y')
                     except:
                         pass
                 
@@ -3137,6 +4025,9 @@ Date: {created_at}"""
                 self.order_info_label.setText(order_info)
                 self.log_print_message(f"Order found: {original_order_number} - {site_name}")
                 
+                # Reset visual feedback
+                self.highlight_order_input(False)
+                
                 # Show crate count dialog immediately after scanning
                 self.show_crate_count_dialog()
                 
@@ -3145,10 +4036,16 @@ Date: {created_at}"""
                 self.current_order_data = None
                 self.log_print_message(f"Order {original_order_number} not found")
                 
+                # Reset visual feedback
+                self.highlight_order_input(False)
+                
         except Exception as e:
             self.order_info_label.setText(f"Error fetching order data: {str(e)}")
             self.current_order_data = None
             self.log_print_message(f"Error fetching order data: {str(e)}")
+            
+            # Reset visual feedback
+            self.highlight_order_input(False)
     
     def connect_printer(self):
         """Connect to Zebra ZT411 printer"""
@@ -3169,25 +4066,29 @@ Date: {created_at}"""
                         'ZT421' in printer_upper or
                         'ZT231' in printer_upper or
                         'ZT230' in printer_upper or
+                        'ZT220' in printer_upper or
+                        'ZT420' in printer_upper or
+                        'ZD420' in printer_upper or
+                        'ZD620' in printer_upper or
                         'ZEBRA' in printer_upper or 
                         'ZDESIGNER' in printer_upper or
                         'ZPL' in printer_upper or
                         'ZEBRA ZT' in printer_upper or
-                        'ZEBRA ZD' in printer_upper):
+                        'ZEBRA ZD' in printer_upper or
+                        'ZEBRA GC' in printer_upper or
+                        'ZEBRA GK' in printer_upper):
                         zebra_printer = printer
                         break
                 
                 if zebra_printer:
-                    self.zebra_printer = zebra_printer
-                    self.printer_status_label.setText(f"Connected to: {zebra_printer}")
-                    self.printer_status_label.setStyleSheet("""
-                        QLabel#printerStatusLabel {
-                            color: #27ae60;
-                            font-weight: bold;
-                        }
-                    """)
-                    self.log_print_message(f"Successfully connected to Zebra printer: {zebra_printer}")
-                    return
+                    # Test if the printer is actually available and responsive
+                    if self.test_printer_connectivity(zebra_printer):
+                        self.zebra_printer = zebra_printer
+                        self.update_printer_status(zebra_printer, "#27ae60")
+                        self.log_print_message(f"Successfully connected to Zebra printer: {zebra_printer}")
+                        return
+                    else:
+                        self.log_print_message(f"Found Zebra printer '{zebra_printer}' but it's not responding")
                 else:
                     self.log_print_message("No Zebra printer found in system printers")
             else:
@@ -3200,11 +4101,104 @@ Date: {created_at}"""
             self.log_print_message(f"Printer detection failed: {str(e)}")
             self.try_usb_connection()
     
+    def test_printer_connectivity(self, printer_name):
+        """Test if a system printer is actually available and responsive"""
+        try:
+            import win32print
+            import win32api
+            
+            # Get printer handle
+            handle = win32print.OpenPrinter(printer_name)
+            if handle:
+                try:
+                    # Get printer info to test connectivity
+                    printer_info = win32print.GetPrinter(handle, 2)
+                    
+                    # Check if printer is online and ready
+                    if printer_info and printer_info.get('Status') == 0:  # 0 means ready
+                        # Additional test: Try to send a small test job to verify physical connectivity
+                        try:
+                            # Create a minimal ZPL test command
+                            test_zpl = "^XA^XZ"  # Minimal ZPL command that should be accepted by any Zebra printer
+                            
+                            # Try to send the test command
+                            job_id = win32print.StartDocPrinter(handle, 1, ("Test", None, "RAW"))
+                            if job_id:
+                                win32print.StartPagePrinter(handle)
+                                win32print.WritePrinter(handle, test_zpl.encode('utf-8'))
+                                win32print.EndPagePrinter(handle)
+                                win32print.EndDocPrinter(handle)
+                                win32print.ClosePrinter(handle)
+                                return True
+                            else:
+                                win32print.ClosePrinter(handle)
+                                return False
+                        except Exception as test_error:
+                            # If test print fails, printer is likely not physically connected
+                            self.log_print_message(f"Printer '{printer_name}' test print failed: {str(test_error)}")
+                            win32print.ClosePrinter(handle)
+                            return False
+                    else:
+                        win32print.ClosePrinter(handle)
+                        self.log_print_message(f"Printer '{printer_name}' is not ready (Status: {printer_info.get('Status', 'Unknown') if printer_info else 'No info'})")
+                        return False
+                        
+                except Exception as e:
+                    self.log_print_message(f"Error testing printer connectivity: {str(e)}")
+                    try:
+                        win32print.ClosePrinter(handle)
+                    except:
+                        pass
+                    return False
+            else:
+                self.log_print_message(f"Could not open printer '{printer_name}'")
+                return False
+                
+        except ImportError:
+            # Fallback method if win32print is not available
+            self.log_print_message("win32print not available, using fallback connectivity test")
+            return self.test_printer_connectivity_fallback(printer_name)
+        except Exception as e:
+            self.log_print_message(f"Printer connectivity test failed: {str(e)}")
+            return False
+    
+    def test_printer_connectivity_fallback(self, printer_name):
+        """Fallback method to test printer connectivity without win32print"""
+        try:
+            # Use Windows command to check printer status
+            result = subprocess.run(['wmic', 'printer', 'where', f'name="{printer_name}"', 'get', 'workoffline,printerstatus'], 
+                                  capture_output=True, text=True, shell=True)
+            
+            if result.returncode == 0:
+                output = result.stdout.lower()
+                # Check if printer is offline
+                if 'workoffline' in output and 'true' in output:
+                    self.log_print_message(f"Printer '{printer_name}' is offline")
+                    return False
+                # Check printer status (3 = ready, 4 = printing, 5 = error)
+                elif 'printerstatus' in output:
+                    if '3' in output or '4' in output:  # Ready or printing
+                        return True
+                    else:
+                        self.log_print_message(f"Printer '{printer_name}' status indicates not ready")
+                        return False
+                else:
+                    # If we can't determine status, be conservative and assume not available
+                    self.log_print_message(f"Could not determine printer '{printer_name}' status")
+                    return False
+            else:
+                self.log_print_message(f"Could not check printer status: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            self.log_print_message(f"Fallback connectivity test failed: {str(e)}")
+            return False
+    
     def try_usb_connection(self):
         """Try to connect via USB port and verify it's a Zebra printer"""
         try:
-            # Try common USB ports for Zebra printers
-            usb_ports = ['COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10']
+            # Try common USB ports for Zebra printers (expanded range)
+            usb_ports = ['COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10', 'COM11', 'COM12', 'COM13', 'COM14', 'COM15', 'COM16']
             
             for port in usb_ports:
                 try:
@@ -3221,22 +4215,16 @@ Date: {created_at}"""
                     response = ser.read(100).decode('utf-8', errors='ignore')
                     ser.close()
                     
-                    # Check if response indicates a Zebra printer
+                    # Check if response indicates a Zebra printer (be more strict)
                     if ('ZEBRA' in response.upper() or 
                         'ZT' in response.upper() or
                         'ZPL' in response.upper() or
-                        len(response) > 0):  # Any response suggests a printer
+                        'ZDESIGNER' in response.upper()):
                         
                         # Store the port for printing
                         self.zebra_printer = f"USB:{port}"
                         
-                        self.printer_status_label.setText(f"Connected to: Zebra USB {port}")
-                        self.printer_status_label.setStyleSheet("""
-                            QLabel#printerStatusLabel {
-                                color: #27ae60;
-                                font-weight: bold;
-                            }
-                        """)
+                        self.update_printer_status(f"Zebra USB {port}", "#27ae60")
                         self.log_print_message(f"Successfully connected to Zebra printer via USB: {port}")
                         return
                     
@@ -3248,189 +4236,15 @@ Date: {created_at}"""
             self.try_fallback_usb_connection()
             
         except Exception as e:
-            self.printer_status_label.setText("Connected to: Connection Failed")
-            self.printer_status_label.setStyleSheet("""
-                QLabel#printerStatusLabel {
-                    color: #e74c3c;
-                    font-weight: bold;
-                }
-            """)
+            self.update_printer_status("Connection Failed", "#e74c3c")
             self.log_print_message(f"USB connection failed: {str(e)}")
             self.zebra_printer = None
     
     def try_fallback_usb_connection(self):
-        """Fallback method to connect to any available USB port"""
-        try:
-            usb_ports = ['COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10']
-            
-            for port in usb_ports:
-                try:
-                    # Test if port is available (without verification)
-                    ser = serial.Serial(port, 9600, timeout=1)
-                    ser.close()
-                    
-                    # Store the port for printing (assume it's a printer)
-                    self.zebra_printer = f"USB:{port}"
-                    
-                    self.printer_status_label.setText(f"Connected to: USB {port} (Unverified)")
-                    self.printer_status_label.setStyleSheet("""
-                        QLabel#printerStatusLabel {
-                            color: #f39c12;
-                            font-weight: bold;
-                        }
-                    """)
-                    self.log_print_message(f"Connected to USB port {port} (printer type not verified)")
-                    return
-                    
-                except Exception:
-                    continue
-            
-            # If no USB connection worked
-            self.printer_status_label.setText("Connected to: Not Found")
-            self.printer_status_label.setStyleSheet("""
-                QLabel#printerStatusLabel {
-                    color: #e74c3c;
-                    font-weight: bold;
-                }
-            """)
-            self.log_print_message("No printer found on any USB port")
-            self.zebra_printer = None
-            
-        except Exception as e:
-            self.printer_status_label.setText("Connected to: Connection Failed")
-            self.printer_status_label.setStyleSheet("""
-                QLabel#printerStatusLabel {
-                    color: #e74c3c;
-                    font-weight: bold;
-                }
-            """)
-            self.log_print_message(f"Fallback USB connection failed: {str(e)}")
-            self.zebra_printer = None
-    
-    def show_printer_selection_dialog(self):
-        """Show dialog to manually select printer"""
-        try:
-            # Get available printers
-            result = subprocess.run(['wmic', 'printer', 'get', 'name'], 
-                                  capture_output=True, text=True, shell=True)
-            
-            printers = []
-            if result.returncode == 0:
-                printers = [line.strip() for line in result.stdout.split('\n') 
-                           if line.strip() and line.strip() != 'Name']
-            
-            # Add USB port options
-            usb_ports = ['COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10']
-            usb_options = [f"USB:{port}" for port in usb_ports]
-            
-            # Create dialog
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Select Printer")
-            dialog.setModal(True)
-            dialog.setFixedSize(400, 300)
-            
-            layout = QVBoxLayout(dialog)
-            
-            # Title
-            title_label = QLabel("Select Printer")
-            title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
-            layout.addWidget(title_label)
-            
-            # Printer list
-            printer_list = QListWidget()
-            printer_list.setStyleSheet("""
-                QListWidget {
-                    border: 1px solid #ddd;
-                    border-radius: 4px;
-                    padding: 5px;
-                    background-color: white;
-                }
-                QListWidget::item {
-                    padding: 8px;
-                    border-bottom: 1px solid #eee;
-                }
-                QListWidget::item:selected {
-                    background-color: #3498db;
-                    color: white;
-                }
-            """)
-            
-            # Add system printers
-            if printers:
-                system_label = QLabel("System Printers:")
-                system_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
-                layout.addWidget(system_label)
-                
-                for printer in printers:
-                    printer_list.addItem(printer)
-            
-            # Add USB options
-            usb_label = QLabel("USB Ports:")
-            usb_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
-            layout.addWidget(usb_label)
-            
-            for usb_option in usb_options:
-                printer_list.addItem(usb_option)
-            
-            layout.addWidget(printer_list)
-            
-            # Buttons
-            button_layout = QHBoxLayout()
-            
-            cancel_button = QPushButton("Cancel")
-            cancel_button.setStyleSheet("""
-                QPushButton {
-                    background-color: #6c757d;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 8px 16px;
-                }
-                QPushButton:hover {
-                    background-color: #5a6268;
-                }
-            """)
-            cancel_button.clicked.connect(dialog.reject)
-            button_layout.addWidget(cancel_button)
-            
-            select_button = QPushButton("Select")
-            select_button.setStyleSheet("""
-                QPushButton {
-                    background-color: #007bff;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 8px 16px;
-                }
-                QPushButton:hover {
-                    background-color: #0056b3;
-                }
-            """)
-            select_button.clicked.connect(dialog.accept)
-            button_layout.addWidget(select_button)
-            
-            layout.addLayout(button_layout)
-            
-            # Show dialog
-            if dialog.exec() == QDialog.Accepted:
-                selected_item = printer_list.currentItem()
-                if selected_item:
-                    selected_printer = selected_item.text()
-                    self.zebra_printer = selected_printer
-                    
-                    # Update status
-                    self.printer_status_label.setText(f"Connected to: {selected_printer}")
-                    self.printer_status_label.setStyleSheet("""
-                        QLabel#printerStatusLabel {
-                            color: #27ae60;
-                            font-weight: bold;
-                        }
-                    """)
-                    self.log_print_message(f"Manually selected printer: {selected_printer}")
-                    
-        except Exception as e:
-            QMessageBox.warning(self, "Printer Selection Error", f"Error selecting printer: {str(e)}")
-            self.log_print_message(f"Printer selection error: {str(e)}")
+        """Fallback method - do not connect to unverified ports"""
+        self.log_print_message("No verified Zebra printer found on any USB ports")
+        self.update_printer_status("No Printer Found", "#e74c3c")
+        self.zebra_printer = None
     
     def show_crate_count_dialog(self):
         """Show crate count dialog after scanning order number"""
@@ -3470,95 +4284,6 @@ Date: {created_at}"""
         # Reset dialog flag
         self.dialog_open = False
     
-    def change_date(self):
-        """Open date selection dialog"""
-        dialog = DateSelectionDialog(self.selected_date, self)
-        dialog.setWindowTitle("Select Date for Labels")
-        
-        # Center the dialog on screen
-        dialog.move(self.x() + (self.width() - dialog.width()) // 2, 
-                   self.y() + (self.height() - dialog.height()) // 2)
-        
-        if dialog.exec() == QDialog.Accepted:
-            self.selected_date = dialog.get_selected_date()
-            self.date_button.setText(f"Date: {self.selected_date}")
-            self.log_print_message(f"Date changed to: {self.selected_date}")
-    
-    def open_manual_print_dialog(self):
-        """Open manual label printing dialog"""
-        if not self.zebra_printer:
-            QMessageBox.warning(self, "Printer Error", "Please connect to printer first.")
-            return
-        
-        dialog = ManualLabelDialog(self)
-        dialog.setWindowTitle("Manual Label Printing")
-        
-        # Center the dialog on screen
-        dialog.move(self.x() + (self.width() - dialog.width()) // 2, 
-                   self.y() + (self.height() - dialog.height()) // 2)
-        
-        if dialog.exec() == QDialog.Accepted:
-            label_data = dialog.get_label_data()
-            
-            # Validate required fields
-            if not label_data['order_number']:
-                QMessageBox.warning(self, "Validation Error", "Order number is required.")
-                return
-            
-            if not label_data['site_name']:
-                QMessageBox.warning(self, "Validation Error", "Site name is required.")
-                return
-            
-            if not label_data['route']:
-                QMessageBox.warning(self, "Validation Error", "Route is required.")
-                return
-            
-            if not label_data['dispatch_code']:
-                QMessageBox.warning(self, "Validation Error", "Dispatch code is required.")
-                return
-            
-            # Print labels with manual data
-            self.print_manual_labels_with_count(label_data)
-    
-    def print_manual_labels_with_count(self, label_data):
-        """Print labels with manually entered data"""
-        try:
-            order_number = label_data['order_number']
-            site_name = label_data['site_name']
-            route = label_data['route']
-            dispatch_code = label_data['dispatch_code']
-            crate_count = label_data['crate_count']
-            
-            # Check if more than 15 labels are being printed
-            if crate_count > 15:
-                reply = QMessageBox.question(
-                    self, 
-                    "Confirm Label Count", 
-                    f"You are trying to print {crate_count} labels. Is 15 labels the correct required amount?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
-                )
-                if reply == QMessageBox.Yes:
-                    crate_count = 15  # Limit to 15 labels
-                    self.log_print_message(f"Label count limited to 15 as confirmed by user")
-                else:
-                    self.log_print_message(f"Print cancelled by user - {crate_count} labels requested")
-                    return
-            
-            self.log_print_message(f"Printing {crate_count} manual labels for order {order_number}")
-            
-            # Print each label
-            for i in range(1, crate_count + 1):
-                zpl_code = self.generate_label_zpl(order_number, site_name, route, i, crate_count, dispatch_code)
-                self.send_to_printer(zpl_code)
-                self.log_print_message(f"Printed label {i}/{crate_count}")
-            
-            self.log_print_message(f"Successfully printed {crate_count} manual labels for order {order_number}")
-            
-        except Exception as e:
-            error_msg = f"Manual print error: {str(e)}"
-            self.log_print_message(error_msg)
-            QMessageBox.critical(self, "Print Error", error_msg)
     
     def print_labels_with_count(self, crate_count):
         """Print labels with specified crate count"""
@@ -3605,6 +4330,11 @@ Date: {created_at}"""
                 self.log_print_message(f"Printed label {i}/{crate_count}")
             
             self.log_print_message(f"Successfully printed {crate_count} labels for order {order_number}")
+            
+            # Record the print event in the database
+            import os
+            printed_by = os.getenv('USERNAME', 'Unknown User')
+            self.record_print_event(order_number, site_name, crate_count, route, printed_by)
             
         except Exception as e:
             error_msg = f"Print error: {str(e)}"
@@ -3743,8 +4473,6 @@ Date: {created_at}"""
         width_dots = int(6.5 * 80)  # 520 dots
         height_dots = int(13.5 * 80)  # 1080 dots
         
-        # Use selected date instead of current date
-        current_date = self.selected_date
         
         # Ensure all variables have default values if None
         order_number = order_number or "N/A"
@@ -3753,10 +4481,10 @@ Date: {created_at}"""
         dispatchcode = dispatchcode or "N/A"
         barcode_data = order_number
         
-        # Handle long site names - split into maximum 2 lines with optimized breaking
+        # Handle long site names - allow up to 3 lines to accommodate Region 3 + Region 5 text
         site_name_lines = []
         # Use longer line length to reduce number of lines while ensuring fit
-        max_chars_per_line = 25
+        max_chars_per_line = 28  # Increased from 25 to accommodate longer combined text
         
         if len(site_name) > max_chars_per_line:
             words = site_name.split()
@@ -3768,15 +4496,15 @@ Date: {created_at}"""
                     if current_line:
                         site_name_lines.append(current_line)
                     current_line = word
-                    # Limit to maximum 2 lines
-                    if len(site_name_lines) >= 2:
-                        # If we already have 2 lines, truncate the remaining text
+                    # Allow up to 3 lines to fit the complete site name
+                    if len(site_name_lines) >= 3:
+                        # If we already have 3 lines, truncate the remaining text
                         remaining_text = " ".join([current_line] + words[words.index(word):])
-                        if len(remaining_text) > 15:
-                            remaining_text = remaining_text[:12] + "..."
+                        if len(remaining_text) > 20:
+                            remaining_text = remaining_text[:17] + "..."
                         site_name_lines.append(remaining_text)
                         break
-            if current_line and len(site_name_lines) < 2:
+            if current_line and len(site_name_lines) < 3:
                 site_name_lines.append(current_line)
         else:
             site_name_lines = [site_name]
@@ -3787,17 +4515,22 @@ Date: {created_at}"""
         
         if num_lines == 1:
             if total_length <= 15:
-                site_font_size = 60
+                site_font_size = 70
             elif total_length <= 20:
-                site_font_size = 55
+                site_font_size = 65
             else:
-                site_font_size = 50
+                site_font_size = 60
         elif num_lines == 2:
             if total_length <= 30:
+                site_font_size = 60
+            else:
+                site_font_size = 55
+        elif num_lines == 3:
+            if total_length <= 45:
                 site_font_size = 50
             else:
                 site_font_size = 45
-        else:  # 3+ lines (shouldn't happen with our 2-line limit)
+        else:  # 4+ lines (shouldn't happen with our 3-line limit)
             site_font_size = 40
         
         # Handle long route names - split into maximum 2 lines with optimized breaking
@@ -3866,44 +4599,36 @@ Date: {created_at}"""
             else:
                 route_font_size = 40
             
-        # Date font sizing - adjust based on length
-        if len(current_date) <= 10:
-            date_font_size = 30
-        else:
-            date_font_size = 25
         
-        # Start position with 25% empty space at top (270 dots = 25% of 1080)
-        start_y = 270  # 25% of 1080 dots - moved content even lower
+        # Start position with more empty space at top to move content down
+        start_y = 350  # Fine-tuned positioning - moved up slightly from 400
         
         # Build ZPL code with proper positioning and center alignment
         zpl = f"""^XA
 ^PW{width_dots}
 ^LL{height_dots}
-^FO{width_dots//2 - len(dispatchcode)*12},{start_y}^A0N,50,50^FD{dispatchcode}^FS
 ^FO30,{start_y + 80}^GB480,2,2^FS"""
         
-        # Add site name lines (left aligned) with increased spacing
+        # Add site name lines (left aligned) with increased spacing and bold font
+        # Note: site_name now contains combined Region 3 + Region 5 text
         y_pos = start_y + 100
         for line in site_name_lines:
             zpl += f"\n^FO30,{y_pos}^A0N,{site_font_size},{site_font_size}^FD{line}^FS"
             y_pos += site_font_size + 25  # Increased from 15 to 25
         
-        # Add date (center aligned) with increased spacing
+        # Add crate info (center aligned) with increased spacing
         y_pos += 30  # Increased from 20 to 30
         zpl += f"""
 ^FO30,{y_pos}^GB480,2,2^FS
-^FO{width_dots//2 - len(current_date)*10},{y_pos + 25}^A0N,{date_font_size},{date_font_size}^FD{current_date}^FS
-^FO30,{y_pos + 80}^GB480,2,2^FS
-^FO{width_dots//2 - len(crate_text)*12},{y_pos + 105}^A0N,{crate_font_size},{crate_font_size}^FD^CI28^FD{crate_text}^FS
-^FO30,{y_pos + 170}^GB480,2,2^FS
-^FO{max(20, width_dots//2 - (len(barcode_data) * barcode_width * 7))},{y_pos + 190}^BY{barcode_width}
+^FO{width_dots//2 - len(crate_text)*12},{y_pos + 25}^A0N,{crate_font_size},{crate_font_size}^FD^CI28^FD{crate_text}^FS
+^FO30,{y_pos + 90}^GB480,2,2^FS
+^FO{max(20, width_dots//2 - (len(barcode_data) * barcode_width * 7))},{y_pos + 110}^BY{barcode_width}
 ^BCN,{barcode_height},Y,N,N
 ^FD{barcode_data}^FS
-^FO30,{y_pos + 190 + barcode_height + 50}^GB480,2,2^FS
-^FO{width_dots//2 - len('Route')*8},{y_pos + 190 + barcode_height + 70}^A0N,35,35^FDRoute^FS"""
+^FO30,{y_pos + 110 + barcode_height + 50}^GB480,2,2^FS"""
         
         # Add route lines (center aligned) with increased spacing
-        route_y_pos = y_pos + 190 + barcode_height + 110
+        route_y_pos = y_pos + 110 + barcode_height + 70
         for line in route_lines:
             zpl += f"\n^FO{max(30, width_dots//2 - len(line)*18)},{route_y_pos}^A0N,{route_font_size},{route_font_size}^FD{line}^FS"
             route_y_pos += route_font_size + 15  # Space between lines
@@ -3989,7 +4714,11 @@ Date: {created_at}"""
     def clear_logs(self, dialog):
         """Clear all logs"""
         self.print_log.clear()
-        dialog.accept()
+    
+    def clear_print_log(self):
+        """Clear the main print log widget"""
+        self.print_log.clear()
+        self.log_print_message("Log cleared by user")
     
     
     def create_unified_file_selection_column(self):
@@ -4454,7 +5183,19 @@ Date: {created_at}"""
         workflow_text.setWordWrap(True)
         layout.addWidget(workflow_text)
         
+        # Debug OCR Regions button
+        debug_btn = QPushButton("🔍 Debug OCR Regions")
+        debug_btn.setObjectName("secondaryButton")
+        debug_btn.clicked.connect(self.show_ocr_debug_dialog)
+        debug_btn.setToolTip("View and test OCR region configurations")
+        layout.addWidget(debug_btn)
+        
         return section
+    
+    def show_ocr_debug_dialog(self):
+        """Show the OCR debug dialog"""
+        dialog = OCRDebugDialog(self.ocr_regions, self)
+        dialog.exec()
     
     def create_requirements_section(self):
         """Create Excel column requirements section"""
@@ -4682,6 +5423,21 @@ Date: {created_at}"""
             debug_results = []
             configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
             
+            # Debug: Print OCR region information
+            print("="*80)
+            print("🔍 OCR REGIONS DEBUG INFORMATION")
+            print("="*80)
+            print(f"Total OCR regions configured: {len(configured_regions)}")
+            for region_id, region_data in self.ocr_regions.items():
+                if region_data.get('coordinates'):
+                    print(f"  ✅ {region_data['name']} ({region_data['color']}): {region_data['coordinates']}")
+                    # Special debug for Region 5
+                    if region_data['name'] == 'Region 5':
+                        print(f"      🟣 REGION 5 COORDINATES: {region_data['coordinates']}")
+                else:
+                    print(f"  ❌ {region_data['name']} ({region_data['color']}): Not configured")
+            print("="*80)
+            
             # Calculate total work
             total_pdfs = len(self.picking_sheet_files)
             total_work = 0
@@ -4709,13 +5465,30 @@ Date: {created_at}"""
                     for page_num in range(len(pdf_document)):
                         page = pdf_document[page_num]
                         
+                        # Debug: Print page processing info
+                        print(f"  📄 Processing page {page_num + 1} of {Path(pdf_path).name}")
+                        
                         for region in configured_regions:
                             coordinates = region['coordinates']
                             rect = fitz.Rect(coordinates[0], coordinates[1], coordinates[2], coordinates[3])
                             
+                            # Debug: Print region processing info
+                            print(f"    🔍 Extracting from {region['name']} ({region['color']}) at {coordinates}")
+                            
                             extracted_text = self.extract_text_from_exact_coordinates(page, rect)
                             
+                            # Debug: Print extraction results
+                            if extracted_text.strip():
+                                print(f"      ✅ Extracted: '{extracted_text.strip()}'")
+                                # Special debug for Region 5
+                                if region['name'] == 'Region 5':
+                                    print(f"      🟣 REGION 5 DEBUG: Raw text = '{extracted_text}'")
+                                    print(f"      🟣 REGION 5 DEBUG: Cleaned text = '{self.clean_extracted_text(extracted_text)}'")
+                            else:
+                                print(f"      ❌ No text extracted from {region['name']}")
+                            
                             if not extracted_text.strip():
+                                print(f"      🔄 Trying OCR fallback for {region['name']}...")
                                 try:
                                     mat = fitz.Matrix(3.0, 3.0)
                                     pix = page.get_pixmap(matrix=mat, clip=rect)
@@ -4728,11 +5501,14 @@ Date: {created_at}"""
                                             ocr_text = pytesseract.image_to_string(image, config=f'--psm {psm_mode}')
                                             if ocr_text.strip():
                                                 extracted_text = ocr_text
+                                                print(f"      ✅ OCR extracted: '{ocr_text.strip()}' (PSM {psm_mode})")
                                                 break
                                         except Exception:
                                             continue
+                                    else:
+                                        print(f"      ❌ OCR failed for {region['name']} - no text detected")
                                 except Exception as ocr_error:
-                                    pass
+                                    print(f"      ❌ OCR error for {region['name']}: {str(ocr_error)}")
                             
                             cleaned_text = self.clean_extracted_text(extracted_text)
                             
@@ -4870,17 +5646,28 @@ Date: {created_at}"""
                         'region_1': '',  # Column J (Route)
                         'region_2': '',  # Column A (Order Number)
                         'region_3': '',  # Column G (Site Name)
-                        'region_4': ''   # For trigger text verification
+                        'region_4': '',  # For trigger text verification
+                        'region_5': ''   # Additional data field
                     }
                 
                 if 'Region 1' in region_name:
                     results_by_file_page[key]['region_1'] = extracted_text
                 elif 'Region 2' in region_name:
-                    results_by_file_page[key]['region_2'] = extracted_text
+                    results_by_file_page[key]['region_2'] = extracted_text.upper()  # Convert to uppercase
                 elif 'Region 3' in region_name:
                     results_by_file_page[key]['region_3'] = extracted_text
                 elif 'Region 4' in region_name:
                     results_by_file_page[key]['region_4'] = extracted_text
+                elif 'Region 5' in region_name:
+                    # Append Region 5 text to Region 3 text
+                    if 'region_3' in results_by_file_page[key]:
+                        # If Region 3 already has text, append Region 5 with a space
+                        results_by_file_page[key]['region_3'] += ' ' + extracted_text
+                    else:
+                        # If Region 3 doesn't have text yet, just set Region 5 text
+                        results_by_file_page[key]['region_3'] = extracted_text
+                    # Also store Region 5 separately for reference
+                    results_by_file_page[key]['region_5'] = extracted_text
             
             # Convert to Excel data structure
             excel_data = []
@@ -5467,13 +6254,14 @@ Date: {created_at}"""
             # Column H: Account Code (→ accountcode)
             # Column I: Dispatch Code (→ dispatchcode)
             # Column J: Route (→ route)
+            # Note: Region 5 data is combined with Region 3 in Column G
             ws.cell(row=1, column=1, value="Order Number").font = Font(bold=True)  # Column A
             ws.cell(row=1, column=2, value="Item Code").font = Font(bold=True)  # Column B
             ws.cell(row=1, column=3, value="Product Description").font = Font(bold=True)  # Column C
             ws.cell(row=1, column=4, value="Barcode").font = Font(bold=True)  # Column D
             ws.cell(row=1, column=5, value="Customer Type").font = Font(bold=True)  # Column E
             ws.cell(row=1, column=6, value="Quantity").font = Font(bold=True)  # Column F
-            ws.cell(row=1, column=7, value="Site Name").font = Font(bold=True)  # Column G
+            ws.cell(row=1, column=7, value="Site Name").font = Font(bold=True)  # Column G (Region 3 + Region 5)
             ws.cell(row=1, column=8, value="Account Code").font = Font(bold=True)  # Column H
             ws.cell(row=1, column=9, value="Dispatch Code").font = Font(bold=True)  # Column I
             ws.cell(row=1, column=10, value="Route").font = Font(bold=True)  # Column J
@@ -5533,18 +6321,29 @@ Date: {created_at}"""
                         'region_1': '',  # Column J
                         'region_2': '',  # Column A  
                         'region_3': '',  # Column G
-                        'region_4': ''   # For trigger text verification
+                        'region_4': '',  # For trigger text verification
+                        'region_5': ''   # Additional data field
                     }
                 
                 # Map regions to columns based on new requirements
                 if 'Region 1' in region_name:
                     results_by_file_page[key]['region_1'] = extracted_text
                 elif 'Region 2' in region_name:
-                    results_by_file_page[key]['region_2'] = extracted_text
+                    results_by_file_page[key]['region_2'] = extracted_text.upper()  # Convert to uppercase
                 elif 'Region 3' in region_name:
                     results_by_file_page[key]['region_3'] = extracted_text
                 elif 'Region 4' in region_name:
                     results_by_file_page[key]['region_4'] = extracted_text
+                elif 'Region 5' in region_name:
+                    # Append Region 5 text to Region 3 text
+                    if 'region_3' in results_by_file_page[key]:
+                        # If Region 3 already has text, append Region 5 with a space
+                        results_by_file_page[key]['region_3'] += ' ' + extracted_text
+                    else:
+                        # If Region 3 doesn't have text yet, just set Region 5 text
+                        results_by_file_page[key]['region_3'] = extracted_text
+                    # Also store Region 5 separately for reference
+                    results_by_file_page[key]['region_5'] = extracted_text
             
             # Write data to Excel in the correct columns according to the required format
             row = 2
@@ -5561,7 +6360,7 @@ Date: {created_at}"""
                     ws.cell(row=row, column=4, value="")  # Column D: Barcode (→ barcode) - empty for now
                     ws.cell(row=row, column=5, value="")  # Column E: Customer Type (→ customer_type) - empty for now
                     ws.cell(row=row, column=6, value="")  # Column F: Quantity (→ quantity) - empty for now
-                    ws.cell(row=row, column=7, value=data['region_3'])  # Column G: Site Name (→ sitename) - Region 3
+                    ws.cell(row=row, column=7, value=data['region_3'])  # Column G: Site Name (→ sitename) - Region 3 + Region 5 combined
                     ws.cell(row=row, column=8, value="")  # Column H: Account Code (→ accountcode) - empty for now
                     ws.cell(row=row, column=9, value="")  # Column I: Dispatch Code (→ dispatchcode) - empty for now
                     ws.cell(row=row, column=10, value=data['region_1'])  # Column J: Route (→ route) - Region 1
@@ -5809,6 +6608,42 @@ Date: {created_at}"""
         except Exception as e:
             print(f"Error loading existing data: {e}")
             self.update_status("Ready - use OptimoRoute Sorter to load delivery sequence data first")
+    
+    def load_ocr_config(self):
+        """Load OCR configuration from file, but keep hardcoded Region 5 coordinates"""
+        try:
+            config_path = Path("app_data") / "ocr_config.json"
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                
+                if 'ocr_regions' in config:
+                    # Load config but override Region 5 with hardcoded coordinates
+                    self.ocr_regions = config['ocr_regions']
+                    # Force Region 5 to use hardcoded coordinates
+                    self.ocr_regions['region_5'] = {'coordinates': [28, 72, 328, 92], 'color': 'purple', 'name': 'Region 5'}
+                    
+                    self.ocr_setup_completed = config.get('setup_completed', False)
+                    self.region_5_save_location = config.get('region_5_save_location', 'Column K (Region 5 Data)')
+                    
+                    # Print loaded configuration
+                    configured_regions = [region for region in self.ocr_regions.values() if region['coordinates']]
+                    print(f"OCR configuration loaded: {len(configured_regions)} regions configured")
+                    for region in configured_regions:
+                        print(f"  {region['name']} ({region['color']}): {region['coordinates']}")
+                        if region['name'] == 'Region 5':
+                            print(f"    🟣 Region 5 using HARDCODED coordinates: {region['coordinates']}")
+                    
+                    if hasattr(self, 'region_5_save_location'):
+                        print(f"  Region 5 save location: {self.region_5_save_location}")
+                    
+                    return True
+            else:
+                print("OCR config file not found, using hardcoded configuration")
+                return False
+        except Exception as e:
+            print(f"Error loading OCR config: {e}")
+            return False
     
     # Processing methods
     def process_picking_dockets(self):
@@ -7246,7 +8081,7 @@ Date: {created_at}"""
             }
             
             QLabel#labelPrintingTitle {
-                font-size: 18px;
+                font-size: 14px;
                 font-weight: bold;
                 color: #2c3e50;
             }
